@@ -6,7 +6,8 @@
     "shared": "node realtime-server.js",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "deploy:hosting": "npm run build && npx firebase-tools deploy --only hosting"
+    "deploy:hosting": "npm run build && npx firebase-tools deploy --only hosting",
+    "deploy:integrated": "npx firebase-tools deploy --only hosting --config firebase.integrated.json"
   },
   "dependencies": {
     "lucide-react": "0.468.0",
