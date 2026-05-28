@@ -2733,7 +2733,7 @@ const ensureCloudAuth = async () => {
       } catch {
         cloudAuthSession = null;
       }
-      return createAnonymousAuthSession();
+      return null;
     })().finally(() => {
       cloudAuthPromise = null;
     });

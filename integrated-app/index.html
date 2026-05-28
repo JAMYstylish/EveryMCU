@@ -125,6 +125,9 @@ const FIREBASE_ROOT_PATH = "everymcuIntegrated";
 const AUTH_SESSION_KEY = "everymcu-auth-session-v1";
 const LAST_NICKNAME_KEY = "everymcu-last-nickname-v1";
 const CLOUD_STATUS_EVENT = "everymcu-cloud-status";
+const PIN_MIN_LENGTH = 4;
+const PIN_MAX_LENGTH = 12;
+const PIN_PASSWORD_PREFIX = "EveryMCU_PIN_v1:";
 const cloudSegment = value => encodeURIComponent(String(value ?? "guest").trim().replace(/[.#$\[\]\/]/g, "_") || "guest");
 const scopedLocalKey = (base, nickname) => `${base}-${cloudSegment(nickname || "guest")}`;
 const cloudUrl = (...parts) => {
@@ -163,20 +166,82 @@ const saveCloudAuthSession = (session) => {
   cloudAuthSession = session;
   writeLocalJson(AUTH_SESSION_KEY, session);
 };
-const createAnonymousAuthSession = async () => {
+const clearCloudAuthSession = () => {
+  cloudAuthSession = null;
+  try { localStorage.removeItem(AUTH_SESSION_KEY); } catch {}
+};
+const normalizeNicknameForAuth = (nickname) => String(nickname || "").trim().normalize("NFKC");
+const hashNicknameForAuth = (nickname) => {
+  let hash = 2166136261;
+  for (const char of Array.from(normalizeNicknameForAuth(nickname))) {
+    const code = char.codePointAt(0) || 0;
+    hash ^= code & 255;
+    hash = Math.imul(hash, 16777619);
+    hash ^= (code >>> 8) & 255;
+    hash = Math.imul(hash, 16777619);
+    hash ^= (code >>> 16) & 255;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+const authEmailForNickname = (nickname) => `u-${hashNicknameForAuth(nickname)}@users.everymcu.app`;
+const isValidNumericPin = (pin) => new RegExp(`^\\d{${PIN_MIN_LENGTH},${PIN_MAX_LENGTH}}$`).test(String(pin || ""));
+const authPasswordFromPin = (pin) => `${PIN_PASSWORD_PREFIX}${pin}`;
+const readAuthError = async (response) => {
+  try {
+    const data = await response.json();
+    return data?.error?.message || `AUTH_${response.status}`;
+  } catch {
+    return `AUTH_${response.status}`;
+  }
+};
+const sessionFromAuthResponse = (data, nickname, email) => ({
+  authMethod: "password",
+  email,
+  idToken: data.idToken,
+  nickname,
+  refreshToken: data.refreshToken,
+  uid: data.localId,
+  expiresAt: Date.now() + Number(data.expiresIn || 3600) * 1000,
+});
+const signUpPasswordSession = async (nickname, pin) => {
+  const email = authEmailForNickname(nickname);
   const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(FIREBASE_AUTH_API_KEY)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ returnSecureToken: true }),
+    body: JSON.stringify({ email, password: authPasswordFromPin(pin), returnSecureToken: true }),
   });
-  if (!res.ok) throw new Error(`Anonymous auth failed: ${res.status}`);
+  if (!res.ok) throw new Error(await readAuthError(res));
   const data = await res.json();
-  const session = {
-    idToken: data.idToken,
-    refreshToken: data.refreshToken,
-    uid: data.localId,
-    expiresAt: Date.now() + Number(data.expiresIn || 3600) * 1000,
-  };
+  const session = sessionFromAuthResponse(data, nickname, email);
+  saveCloudAuthSession(session);
+  return session;
+};
+const signInPasswordSession = async (nickname, pin) => {
+  const email = authEmailForNickname(nickname);
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(FIREBASE_AUTH_API_KEY)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: authPasswordFromPin(pin), returnSecureToken: true }),
+  });
+  if (!res.ok) throw new Error(await readAuthError(res));
+  const data = await res.json();
+  const session = sessionFromAuthResponse(data, nickname, email);
+  saveCloudAuthSession(session);
+  return session;
+};
+const linkCurrentSessionToPassword = async (nickname, pin) => {
+  const current = await ensureCloudAuth();
+  if (!current?.idToken || current.email) return null;
+  const email = authEmailForNickname(nickname);
+  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${encodeURIComponent(FIREBASE_AUTH_API_KEY)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: current.idToken, email, password: authPasswordFromPin(pin), returnSecureToken: true }),
+  });
+  if (!res.ok) throw new Error(await readAuthError(res));
+  const data = await res.json();
+  const session = sessionFromAuthResponse(data, nickname, email);
   saveCloudAuthSession(session);
   return session;
 };
@@ -189,6 +254,7 @@ const refreshCloudAuthSession = async (refreshToken) => {
   if (!res.ok) throw new Error(`Auth refresh failed: ${res.status}`);
   const data = await res.json();
   const session = {
+    ...cloudAuthSession,
     idToken: data.id_token,
     refreshToken: data.refresh_token,
     uid: data.user_id,
@@ -205,10 +271,9 @@ async function ensureCloudAuth() {
       try {
         if (cloudAuthSession?.refreshToken) return await refreshCloudAuthSession(cloudAuthSession.refreshToken);
       } catch {
-        try { localStorage.removeItem(AUTH_SESSION_KEY); } catch {}
-        cloudAuthSession = null;
+        clearCloudAuthSession();
       }
-      return createAnonymousAuthSession();
+      return null;
     })().finally(() => { cloudAuthPromise = null; });
   }
   return cloudAuthPromise;
@@ -252,12 +317,11 @@ async function cloudWrite(method, parts, value) {
 const cloudPut = (parts, value) => cloudWrite("PUT", parts, value);
 const cloudPatch = (parts, value) => cloudWrite("PATCH", parts, value);
 const cloudDelete = (parts) => cloudWrite("DELETE", parts, null);
-async function claimNickname(nickname) {
+async function claimNicknameForSession(nickname, session) {
   const cleanName = String(nickname || "").trim();
   if (!cleanName) return { ok: false, message: "닉네임을 입력해주세요." };
 
   try {
-    const session = await ensureCloudAuth();
     if (!session?.uid) return { ok: true };
 
     const existing = await cloudGet(["nicknameClaims", cleanName], null);
@@ -280,6 +344,65 @@ async function claimNickname(nickname) {
     console.warn("[EveryMCU] nickname claim failed", err);
     return { ok: false, message: "계정 연결에 실패했어요. 인터넷 연결을 확인해주세요." };
   }
+}
+async function authenticateWithNicknamePin(nickname, pin) {
+  const cleanName = normalizeNicknameForAuth(nickname);
+  const cleanPin = String(pin || "").trim();
+  if (!cleanName) return { ok: false, message: "닉네임을 입력해주세요." };
+  if (!isValidNumericPin(cleanPin)) return { ok: false, message: `비밀번호는 숫자 ${PIN_MIN_LENGTH}~${PIN_MAX_LENGTH}자리로 입력해주세요.` };
+
+  try {
+    let session = await ensureCloudAuth();
+    if (session?.uid && !session.email) {
+      const existing = await cloudGet(["nicknameClaims", cleanName], null);
+      if (existing?.ownerUid === session.uid) {
+        try {
+          session = await linkCurrentSessionToPassword(cleanName, cleanPin);
+          const claim = await claimNicknameForSession(cleanName, session);
+          return claim.ok ? { ok: true, session, mode: "linked" } : claim;
+        } catch (err) {
+          if (!String(err.message || "").includes("EMAIL_EXISTS")) throw err;
+        }
+      }
+    }
+
+    try {
+      session = await signInPasswordSession(cleanName, cleanPin);
+      const claim = await claimNicknameForSession(cleanName, session);
+      return claim.ok ? { ok: true, session, mode: "login" } : claim;
+    } catch (signInError) {
+      const signInMessage = String(signInError.message || "");
+      try {
+        session = await signUpPasswordSession(cleanName, cleanPin);
+      } catch (signUpError) {
+        const signUpMessage = String(signUpError.message || "");
+        if (signUpMessage.includes("EMAIL_EXISTS")) {
+          return { ok: false, message: "비밀번호가 맞지 않아요." };
+        }
+        if (signUpMessage.includes("OPERATION_NOT_ALLOWED")) {
+          return { ok: false, message: "Firebase Authentication에서 이메일/비밀번호 로그인을 켜야 해요." };
+        }
+        if (signInMessage.includes("INVALID_PASSWORD") || signInMessage.includes("INVALID_LOGIN_CREDENTIALS")) {
+          return { ok: false, message: "비밀번호가 맞지 않아요." };
+        }
+        throw signUpError;
+      }
+
+      const claim = await claimNicknameForSession(cleanName, session);
+      return claim.ok ? { ok: true, session, mode: "signup" } : claim;
+    }
+  } catch (err) {
+    console.warn("[EveryMCU] password auth failed", err);
+    return { ok: false, message: "로그인/회원가입에 실패했어요. 인터넷 연결을 확인해주세요." };
+  }
+}
+async function resumeSavedLogin(nickname) {
+  const cleanName = normalizeNicknameForAuth(nickname);
+  if (!cleanName) return false;
+  const session = await ensureCloudAuth();
+  if (!session?.uid) return false;
+  const existing = await cloudGet(["nicknameClaims", cleanName], null);
+  return existing?.ownerUid === session.uid;
 }
 function useCloudStatus() {
   const [status, setStatus] = useState({ state: "idle", message: "클라우드 준비" });
@@ -4127,15 +4250,19 @@ const SplashScreen = ({ onNext }) => {
 // ============================================================
 const NicknameScreen = ({ onConfirm, error }) => {
   const [input, setInput] = useState("");
+  const [pin, setPin] = useState("");
   const [focused, setFocused] = useState(false);
+  const [pinFocused, setPinFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const handleSubmit = async () => {
     const t = input.trim();
-    if (!t || submitting) return;
+    const p = pin.trim();
+    if (!t || !isValidNumericPin(p) || submitting) return;
     setSubmitting(true);
-    const ok = await onConfirm(t);
+    const ok = await onConfirm(t, p);
     if (!ok) setSubmitting(false);
   };
+  const canSubmit = input.trim() && isValidNumericPin(pin) && !submitting;
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center px-8"
       style={{ background: "linear-gradient(160deg, #f8faff 0%, #eef2ff 100%)" }}>
@@ -4148,25 +4275,42 @@ const NicknameScreen = ({ onConfirm, error }) => {
             <User size={30} color="white" />
           </div>
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-gray-800">닉네임을 설정하세요</h2>
-            <p className="text-gray-400 text-sm mt-1">에브리엠씨유에서 사용할 이름이에요</p>
+            <h2 className="text-2xl font-bold text-gray-800">로그인 또는 회원가입</h2>
+            <p className="text-gray-400 text-sm mt-1">처음이면 자동으로 가입되고, 기존이면 로그인돼요</p>
           </div>
         </div>
-        <div className="relative rounded-2xl border-2 transition-all duration-200 overflow-hidden"
-          style={{ borderColor: focused ? "#6366f1" : "#e5e7eb", background: "white", boxShadow: focused ? "0 0 0 4px rgba(99,102,241,0.12)" : "none" }}>
-          <input type="text" value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="닉네임 입력 (최대 10자)" maxLength={10}
-            className="w-full px-5 py-4 text-base text-gray-800 outline-none placeholder-gray-300"
-            style={{ background: "transparent" }} />
-          {input && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300">{input.length}/10</span>}
+        <div className="flex flex-col gap-3">
+          <div className="relative rounded-2xl border-2 transition-all duration-200 overflow-hidden"
+            style={{ borderColor: focused ? "#6366f1" : "#e5e7eb", background: "white", boxShadow: focused ? "0 0 0 4px rgba(99,102,241,0.12)" : "none" }}>
+            <input type="text" value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder="닉네임 입력 (최대 10자)" maxLength={10}
+              className="w-full px-5 py-4 text-base text-gray-800 outline-none placeholder-gray-300"
+              style={{ background: "transparent" }} />
+            {input && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300">{input.length}/10</span>}
+          </div>
+          <div className="relative rounded-2xl border-2 transition-all duration-200 overflow-hidden"
+            style={{ borderColor: pinFocused ? "#6366f1" : "#e5e7eb", background: "white", boxShadow: pinFocused ? "0 0 0 4px rgba(99,102,241,0.12)" : "none" }}>
+            <input type="password" value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, PIN_MAX_LENGTH))}
+              onFocus={() => setPinFocused(true)} onBlur={() => setPinFocused(false)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder={`숫자 비밀번호 (${PIN_MIN_LENGTH}~${PIN_MAX_LENGTH}자리)`}
+              inputMode="numeric" pattern="[0-9]*" maxLength={PIN_MAX_LENGTH}
+              className="w-full px-5 py-4 text-base text-gray-800 outline-none placeholder-gray-300"
+              style={{ background: "transparent" }} />
+            {pin && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300">{pin.length}/{PIN_MAX_LENGTH}</span>}
+          </div>
+          <p className="text-center text-[11px] leading-relaxed text-gray-400">
+            비밀번호는 숫자만 입력할 수 있어요. 같은 닉네임은 같은 비밀번호로 로그인합니다.
+          </p>
         </div>
         {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-center text-xs font-semibold leading-relaxed text-rose-500">{error}</p>}
-        <button onClick={handleSubmit} disabled={!input.trim() || submitting}
+        <button onClick={handleSubmit} disabled={!canSubmit}
           className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl font-bold text-base transition-all duration-200 active:scale-95"
-          style={{ background: input.trim() && !submitting ? "linear-gradient(135deg, #6366f1, #8b5cf6)" : "#e5e7eb", color: input.trim() && !submitting ? "white" : "#9ca3af", cursor: input.trim() && !submitting ? "pointer" : "default", boxShadow: input.trim() && !submitting ? "0 8px 24px rgba(99,102,241,0.35)" : "none" }}>
+          style={{ background: canSubmit ? "linear-gradient(135deg, #6366f1, #8b5cf6)" : "#e5e7eb", color: canSubmit ? "white" : "#9ca3af", cursor: canSubmit ? "pointer" : "default", boxShadow: canSubmit ? "0 8px 24px rgba(99,102,241,0.35)" : "none" }}>
           {submitting ? "계정 확인 중..." : "시작하기"} {!submitting && <ChevronRight size={18} />}
         </button>
       </div>
@@ -4266,12 +4410,12 @@ function App() {
   const [nickname, setNickname] = useState(() => readLastNickname());
   const [claimError, setClaimError] = useState("");
 
-  const enterWithNickname = async (name) => {
+  const enterWithNickname = async (name, pin) => {
     const cleanName = String(name || "").trim();
     setClaimError("");
-    const result = await claimNickname(cleanName);
+    const result = await authenticateWithNicknamePin(cleanName, pin);
     if (!result.ok) {
-      setClaimError(result.message || "닉네임 확인에 실패했어요.");
+      setClaimError(result.message || "로그인/회원가입에 실패했어요.");
       return false;
     }
     saveLastNickname(cleanName);
@@ -4287,7 +4431,13 @@ function App() {
       return;
     }
     setScreen("auth");
-    const ok = await enterWithNickname(savedNickname);
+    const ok = await resumeSavedLogin(savedNickname);
+    if (ok) {
+      setNickname(savedNickname);
+      setScreen("home");
+      return;
+    }
+    clearCloudAuthSession();
     if (!ok) {
       forgetLastNickname();
       setNickname("");
@@ -4297,6 +4447,7 @@ function App() {
 
   const handleChangeNickname = () => {
     forgetLastNickname();
+    clearCloudAuthSession();
     setNickname("");
     setClaimError("");
     setScreen("nickname");
