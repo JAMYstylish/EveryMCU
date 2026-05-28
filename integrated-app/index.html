@@ -325,16 +325,11 @@ async function claimNicknameForSession(nickname, session) {
     if (!session?.uid) return { ok: true };
 
     const existing = await cloudGet(["nicknameClaims", cleanName], null);
-    if (existing?.ownerUid && existing.ownerUid !== session.uid) {
-      return {
-        ok: false,
-        message: "이미 다른 기기에서 사용 중인 닉네임이에요. 다른 닉네임을 선택해주세요.",
-      };
-    }
-
     const now = cloudNow();
     const ok = await cloudPut(["nicknameClaims", cleanName], {
+      authMethod: session.authMethod || "password",
       createdAt: existing?.createdAt || now,
+      email: session.email || authEmailForNickname(cleanName),
       nickname: cleanName,
       ownerUid: session.uid,
       updatedAt: now,
@@ -401,6 +396,10 @@ async function resumeSavedLogin(nickname) {
   if (!cleanName) return false;
   const session = await ensureCloudAuth();
   if (!session?.uid) return false;
+  if (session.email === authEmailForNickname(cleanName)) {
+    const claim = await claimNicknameForSession(cleanName, session);
+    return claim.ok;
+  }
   const existing = await cloudGet(["nicknameClaims", cleanName], null);
   return existing?.ownerUid === session.uid;
 }

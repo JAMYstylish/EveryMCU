@@ -6,8 +6,8 @@
       "nicknameClaims": {
         "$nickname": {
           ".read": "auth != null",
-          ".write": "auth != null && newData.child('ownerUid').val() === auth.uid && (!data.exists() || data.child('ownerUid').val() === auth.uid)",
-          ".validate": "newData.hasChildren(['ownerUid', 'nickname', 'updatedAt'])"
+          ".write": "auth != null && auth.token.email != null && newData.child('authMethod').val() === 'password' && newData.child('ownerUid').val() === auth.uid && newData.child('email').val() === auth.token.email",
+          ".validate": "newData.hasChildren(['authMethod', 'email', 'ownerUid', 'nickname', 'updatedAt'])"
         }
       },
       "users": {
