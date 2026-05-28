@@ -242,9 +242,13 @@ const NicknameScreen = ({ onConfirm }) => {
   );
 };
 
-const HomeScreen = ({ nickname }) => {
+const DEFAULT_PROFILE_AVATAR = "🧑‍💻";
+const cleanProfileAvatar = (avatar) => String(avatar || DEFAULT_PROFILE_AVATAR).trim().slice(0, 8) || DEFAULT_PROFILE_AVATAR;
+
+const HomeScreen = ({ nickname, avatar = DEFAULT_PROFILE_AVATAR }) => {
   const [activeTab, setActiveTab] = useState(null);
   const activeTabData = TABS.find((tab) => tab.id === activeTab);
+  const profileAvatar = cleanProfileAvatar(avatar);
 
   return (
     <div className="fixed inset-0 flex flex-col bg-[#f5f7ff]">
@@ -260,14 +264,14 @@ const HomeScreen = ({ nickname }) => {
           <span className="text-lg font-black tracking-normal text-white">에브리엠씨유</span>
         </div>
         <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1">
-          <User size={13} color="#c4b5fd" />
+          <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-white text-xs shadow-sm">{profileAvatar}</span>
           <span className="text-xs font-medium text-indigo-200">{nickname}</span>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto">
         {activeTabData ? (
-          <activeTabData.Component nickname={nickname} onHome={() => setActiveTab(null)} />
+          <activeTabData.Component nickname={nickname} avatar={profileAvatar} onHome={() => setActiveTab(null)} />
         ) : (
           <div className="p-5">
             <p className="mb-4 text-sm text-gray-400">
@@ -342,10 +346,17 @@ const readNicknameFromUrl = () => {
   return new URLSearchParams(window.location.search).get("nick")?.trim() || "";
 };
 
+const readAvatarFromUrl = () => {
+  if (typeof window === "undefined") return DEFAULT_PROFILE_AVATAR;
+  return cleanProfileAvatar(new URLSearchParams(window.location.search).get("avatar") || DEFAULT_PROFILE_AVATAR);
+};
+
 export default function App() {
   const urlNickname = readNicknameFromUrl();
+  const urlAvatar = readAvatarFromUrl();
   const [screen, setScreen] = useState(urlNickname ? "weekly" : "splash");
   const [nickname, setNickname] = useState(urlNickname);
+  const [avatar] = useState(urlAvatar);
 
   const handleNicknameConfirm = (name) => {
     setNickname(name);
@@ -369,8 +380,8 @@ export default function App() {
   }
 
   if (screen === "weekly") {
-    return <WeeklyStatusFeature nickname={nickname || "guest"} onHome={handleWeeklyHome} />;
+    return <WeeklyStatusFeature nickname={nickname || "guest"} avatar={avatar} onHome={handleWeeklyHome} />;
   }
 
-  return <HomeScreen nickname={nickname} />;
+  return <HomeScreen nickname={nickname} avatar={avatar} />;
 }

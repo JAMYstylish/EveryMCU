@@ -16,6 +16,13 @@
           ".write": "auth != null && root.child('everymcuIntegrated/nicknameClaims/' + $nickname + '/ownerUid').val() === auth.uid"
         }
       },
+      "publicProfiles": {
+        "$nickname": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('everymcuIntegrated/nicknameClaims/' + $nickname + '/ownerUid').val() === auth.uid",
+          ".validate": "newData.hasChildren(['nickname', 'avatar', 'updatedAt'])"
+        }
+      },
       "community": {
         ".read": "auth != null",
         ".write": "auth != null"

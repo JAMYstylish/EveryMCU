@@ -125,6 +125,8 @@ const FIREBASE_ROOT_PATH = "everymcuIntegrated";
 const AUTH_SESSION_KEY = "everymcu-auth-session-v1";
 const LAST_NICKNAME_KEY = "everymcu-last-nickname-v1";
 const CLOUD_STATUS_EVENT = "everymcu-cloud-status";
+const PROFILE_UPDATED_EVENT = "everymcu-profile-updated";
+const DEFAULT_PROFILE_AVATAR = "🧑‍💻";
 const PIN_MIN_LENGTH = 4;
 const PIN_MAX_LENGTH = 12;
 const PIN_PASSWORD_PREFIX = "EveryMCU_PIN_v1:";
@@ -317,6 +319,116 @@ async function cloudWrite(method, parts, value) {
 const cloudPut = (parts, value) => cloudWrite("PUT", parts, value);
 const cloudPatch = (parts, value) => cloudWrite("PATCH", parts, value);
 const cloudDelete = (parts) => cloudWrite("DELETE", parts, null);
+const cleanProfileNickname = (nickname) => String(nickname || "").trim();
+const cleanProfileAvatar = (avatar) => String(avatar || DEFAULT_PROFILE_AVATAR).trim().slice(0, 8) || DEFAULT_PROFILE_AVATAR;
+const getProfileCacheKey = (nickname) => scopedLocalKey("everymcu-public-profile", nickname || "guest");
+const readCachedPublicProfile = (nickname) => {
+  const cleanName = cleanProfileNickname(nickname);
+  const cached = readLocalJson(getProfileCacheKey(cleanName), null);
+  return {
+    nickname: cleanName,
+    avatar: cleanProfileAvatar(cached?.avatar),
+    bio: cached?.bio || "",
+    equippedItems: asList(cached?.equippedItems),
+    updatedAt: cached?.updatedAt || "",
+  };
+};
+const cachePublicProfile = (nickname, profile) => {
+  const cleanName = cleanProfileNickname(nickname);
+  if (!cleanName || cleanName === "익명") return;
+  const previous = readCachedPublicProfile(cleanName);
+  const next = {
+    ...previous,
+    ...profile,
+    nickname: cleanName,
+    avatar: cleanProfileAvatar(profile?.avatar ?? previous.avatar),
+    equippedItems: profile?.equippedItems === undefined ? asList(previous.equippedItems) : asList(profile.equippedItems),
+  };
+  writeLocalJson(getProfileCacheKey(cleanName), next);
+};
+const emitProfileUpdated = (nickname, profile) => {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(PROFILE_UPDATED_EVENT, {
+    detail: { ...profile, nickname: cleanProfileNickname(nickname) },
+  }));
+};
+const savePublicProfile = async (nickname, profile = {}) => {
+  const cleanName = cleanProfileNickname(nickname);
+  if (!cleanName || cleanName === "익명") return false;
+  const previous = readCachedPublicProfile(cleanName);
+  const next = {
+    ...previous,
+    ...profile,
+    nickname: cleanName,
+    avatar: cleanProfileAvatar(profile.avatar ?? previous.avatar),
+    equippedItems: profile.equippedItems === undefined ? asList(previous.equippedItems) : asList(profile.equippedItems),
+    updatedAt: cloudNow(),
+  };
+  cachePublicProfile(cleanName, next);
+  emitProfileUpdated(cleanName, next);
+  return cloudPut(["publicProfiles", cleanName], next);
+};
+function usePublicProfile(nickname) {
+  const cleanName = cleanProfileNickname(nickname);
+  const [profile, setProfile] = useState(() => readCachedPublicProfile(cleanName));
+
+  useEffect(() => {
+    let alive = true;
+    if (!cleanName || cleanName === "익명") {
+      setProfile(readCachedPublicProfile(cleanName));
+      return () => { alive = false; };
+    }
+
+    const cached = readCachedPublicProfile(cleanName);
+    setProfile(cached);
+    cloudGet(["publicProfiles", cleanName], null).then(data => {
+      if (!alive || !data) return;
+      const next = {
+        ...cached,
+        ...data,
+        nickname: cleanName,
+        avatar: cleanProfileAvatar(data.avatar ?? cached.avatar),
+        equippedItems: data.equippedItems === undefined ? asList(cached.equippedItems) : asList(data.equippedItems),
+      };
+      cachePublicProfile(cleanName, next);
+      setProfile(next);
+    });
+
+    const handler = event => {
+      const detail = event.detail || {};
+      if (cleanProfileNickname(detail.nickname) !== cleanName) return;
+      const next = {
+        ...readCachedPublicProfile(cleanName),
+        ...detail,
+        nickname: cleanName,
+        avatar: cleanProfileAvatar(detail.avatar ?? readCachedPublicProfile(cleanName).avatar),
+        equippedItems: detail.equippedItems === undefined ? asList(readCachedPublicProfile(cleanName).equippedItems) : asList(detail.equippedItems),
+      };
+      setProfile(next);
+    };
+    window.addEventListener(PROFILE_UPDATED_EVENT, handler);
+    return () => {
+      alive = false;
+      window.removeEventListener(PROFILE_UPDATED_EVENT, handler);
+    };
+  }, [cleanName]);
+
+  return profile;
+}
+const ProfileAvatar = ({ avatar, nickname, size = "md", className = "" }) => {
+  const sizeClass = {
+    xs: "w-5 h-5 text-[12px] rounded-lg",
+    sm: "w-6 h-6 text-sm rounded-lg",
+    md: "w-9 h-9 text-lg rounded-xl",
+    lg: "w-14 h-14 text-3xl rounded-2xl",
+    xl: "w-20 h-20 text-4xl rounded-3xl",
+  }[size] || "w-9 h-9 text-lg rounded-xl";
+  return (
+    <span className={`inline-flex shrink-0 items-center justify-center bg-gradient-to-br from-indigo-100 via-white to-violet-100 shadow-sm ring-1 ring-indigo-100 ${sizeClass} ${className}`}>
+      {cleanProfileAvatar(avatar || readCachedPublicProfile(nickname).avatar)}
+    </span>
+  );
+};
 async function claimNicknameForSession(nickname, session) {
   const cleanName = String(nickname || "").trim();
   if (!cleanName) return { ok: false, message: "닉네임을 입력해주세요." };
@@ -1368,7 +1480,7 @@ function ProblemCard({problem,index,globalIndex,solved,disabled,submissionCount,
   </button>);
 }
 
-function LearningTrackerFeatureCore({nickname,avatar,setAvatar,onHome}){
+function LearningTrackerFeatureCore({nickname,avatar,setAvatar,syncLoadedAvatar,onHome}){
   const saved=loadStorage(nickname);
   const [view,setView]=useState("home");
   const [selectedStage,setSelectedStage]=useState(null);
@@ -1406,7 +1518,7 @@ function LearningTrackerFeatureCore({nickname,avatar,setAvatar,onHome}){
     setNextRechargeAt(next.nextRechargeAt||0);
     setSolvedMap(next.solvedMap||{});
     setSubmissionHistory(next.submissionHistory||{});
-    setAvatar(next.avatar||"🧑‍💻");
+    syncLoadedAvatar(next.avatar||DEFAULT_PROFILE_AVATAR);
   };
 
   useEffect(()=>{initPy(setPyStatus);},[]);
@@ -1599,12 +1711,34 @@ function LearningTrackerFeatureCore({nickname,avatar,setAvatar,onHome}){
 
 // ── 학습추적 어댑터: 앱 로그인 닉네임을 그대로 사용하고 아바타만 내부 관리 ──
 function LearningTrackerFeature({ nickname, onHome }) {
-  const [avatar, setAvatar] = useState("🧑‍💻");
+  const publicProfile = usePublicProfile(nickname);
+  const [avatar, setAvatarState] = useState(() => publicProfile.avatar || DEFAULT_PROFILE_AVATAR);
+
+  useEffect(() => {
+    setAvatarState(publicProfile.avatar || DEFAULT_PROFILE_AVATAR);
+  }, [nickname, publicProfile.avatar]);
+
+  const setAvatar = (nextAvatar) => {
+    const avatarValue = cleanProfileAvatar(nextAvatar);
+    setAvatarState(avatarValue);
+    savePublicProfile(nickname, { avatar: avatarValue });
+  };
+
+  const syncLoadedAvatar = (nextAvatar) => {
+    const cachedProfile = readCachedPublicProfile(nickname);
+    const avatarValue = cachedProfile.updatedAt ? cachedProfile.avatar : cleanProfileAvatar(nextAvatar);
+    setAvatarState(avatarValue);
+    if (!cachedProfile.updatedAt && nextAvatar) {
+      savePublicProfile(nickname, { avatar: avatarValue });
+    }
+  };
+
   return (
     <LearningTrackerFeatureCore
       nickname={nickname}
       avatar={avatar}
       setAvatar={setAvatar}
+      syncLoadedAvatar={syncLoadedAvatar}
       onHome={onHome}
     />
   );
@@ -2289,11 +2423,13 @@ const DummyScreen = ({ icon, title, description, color, nickname, onHome }) => (
 // [준비중] 주간코황 — 코딩배틀 (링크 첨부 예정)
 // [2번] 주간코황 — 코딩배틀 (배포된 웹앱을 iframe으로 임베드 + 실패 시 안내)
 const WEEKLY_BATTLE_URL = "./weekly/";
-const WeeklyStatusFeature = ({ nickname, onHome }) => {
+const WeeklyStatusFeature = ({ nickname, avatar, onHome }) => {
   const [loading, setLoading] = useState(true);
   const [blocked, setBlocked] = useState(false);
   const loadedRef = useRef(false);
-  const src = WEEKLY_BATTLE_URL + "?nick=" + encodeURIComponent(nickname || "");
+  const publicProfile = usePublicProfile(nickname);
+  const activeAvatar = cleanProfileAvatar(avatar || publicProfile.avatar);
+  const src = WEEKLY_BATTLE_URL + "?nick=" + encodeURIComponent(nickname || "") + "&avatar=" + encodeURIComponent(activeAvatar);
 
   useEffect(() => {
     const handleMessage = (event) => {
@@ -2322,6 +2458,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
           <span className="font-bold text-gray-800 text-sm">주간코황 · 코딩배틀</span>
         </div>
         <div className="flex items-center gap-2">
+          <ProfileAvatar avatar={activeAvatar} nickname={nickname} size="sm" />
           <button onClick={onHome}
             className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-medium hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
             <Home size={12} /> 홈
@@ -2514,8 +2651,9 @@ const BackBtn = ({ onBack, label = '목록으로' }) => (
 );
 // ── 유저 프로필 모달 ──
 const UserProfileModal = ({ targetNick, onClose }) => {
-  const eq  = lsGet(`mcu_items_${targetNick}_eq`, []);
-  const bio = lsGet(`mcu_bio_${targetNick}`, '');
+  const publicProfile = usePublicProfile(targetNick);
+  const eq  = publicProfile.equippedItems.length ? publicProfile.equippedItems : lsGet(`mcu_items_${targetNick}_eq`, []);
+  const bio = publicProfile.bio || lsGet(`mcu_bio_${targetNick}`, '');
   const hasDark    = eq.includes('dark-bg');
   const hasGold    = eq.includes('gold-frame');
   const hasCrown   = eq.includes('crown');
@@ -2528,11 +2666,12 @@ const UserProfileModal = ({ targetNick, onClose }) => {
         <div className="px-5 pb-5">
           {/* 아바타 */}
           <div className="flex items-end justify-between -mt-10 mb-3">
-            <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl font-black shadow-lg border-4 border-white
-              ${hasDark ? 'bg-gray-700 text-white' : 'bg-gradient-to-br from-emerald-400 to-teal-500 text-white'}
-              ${hasGold ? 'ring-4 ring-yellow-400' : ''}`}>
-              {targetNick.slice(0,1).toUpperCase()}
-            </div>
+            <ProfileAvatar
+              avatar={publicProfile.avatar}
+              nickname={targetNick}
+              size="xl"
+              className={`border-4 border-white shadow-lg ${hasDark ? 'bg-gray-700' : ''} ${hasGold ? 'ring-4 ring-yellow-400' : ''}`}
+            />
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"><X size={18} /></button>
           </div>
           {/* 닉네임 */}
@@ -2565,6 +2704,7 @@ const UserProfileModal = ({ targetNick, onClose }) => {
 
 // ── 클릭 가능한 닉네임 칩 ──
 const NickChip = ({ name, isAnon = false, onViewProfile, size = 'sm', className = '' }) => {
+  const publicProfile = usePublicProfile(isAnon ? "" : name);
   if (isAnon || !name) return (
     <span className={`flex items-center gap-0.5 ${className}`}>
       <UserX size={size === 'xs' ? 10 : 11} />{name || '익명'}
@@ -2576,7 +2716,7 @@ const NickChip = ({ name, isAnon = false, onViewProfile, size = 'sm', className 
       onClick={e => { e.stopPropagation(); onViewProfile(name); }}
       className={`flex items-center gap-0.5 hover:text-indigo-500 hover:underline underline-offset-2 transition-colors ${className}`}
     >
-      <User size={size === 'xs' ? 10 : 11} />{name}
+      <ProfileAvatar avatar={publicProfile.avatar} nickname={name} size={size === 'xs' ? 'xs' : 'sm'} />{name}
     </button>
   );
 };
@@ -3244,6 +3384,7 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
             </div>
             <div className="flex gap-1 flex-wrap mb-2">{p.tags.map(t => <Badge key={t} text={`#${t}`} color="bg-gray-100 text-gray-500" />)}</div>
             <div className="flex items-center gap-3 text-[11px] text-gray-400">
+              <NickChip name={p.author} onViewProfile={onViewProfile} className="flex items-center gap-0.5 text-[11px] text-gray-400" size="xs" />
               <span className="flex items-center gap-0.5"><ThumbsUp size={10} />{p.likes}</span>
               <span className="flex items-center gap-0.5"><Check size={10} />{p.solvedCount}명 해결</span>
               <span className="flex items-center gap-0.5"><MessageSquare size={10} />{p.comments.length}</span>
@@ -3754,6 +3895,7 @@ const syncCommunityBoard = async (boardKey, list, savedIdsRef) => {
   savedIdsRef.current[boardKey] = nextIds;
 };
 function CommunityFeature({ nickname, onHome }) {
+  const publicProfile = usePublicProfile(nickname);
   const [problems, setProblems]     = useState(() => normalizeProblems(lsGet('mcu_problems', INIT_PROBLEMS)));
   const [qnaPosts, setQnaPosts]     = useState(() => normalizeQnaPosts(lsGet('mcu_qna', INIT_QNA)));
   const [freePosts, setFreePosts]   = useState(() => normalizeFreePosts(lsGet('mcu_free', INIT_FREE)));
@@ -3853,9 +3995,14 @@ function CommunityFeature({ nickname, onHome }) {
         myReactions,
         updatedAt: cloudNow(),
       });
+      savePublicProfile(nickname, {
+        avatar: publicProfile.avatar,
+        bio,
+        equippedItems,
+      });
     }, 350);
     return () => clearTimeout(id);
-  }, [profileCloudReady, nickname, userPoints, ownedItems, equippedItems, bio, myReactions]);
+  }, [profileCloudReady, nickname, userPoints, ownedItems, equippedItems, bio, myReactions, publicProfile.avatar]);
 
   const toggleEquip = effect => {
     setEquippedItems(prev =>
@@ -3952,9 +4099,12 @@ function CommunityFeature({ nickname, onHome }) {
               {/* 프로필 카드 */}
               <div className={`rounded-3xl p-6 flex flex-col items-center gap-3 shadow-sm border ${hasDark ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-100'}`}>
                 {/* 아바타 */}
-                <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl font-black shadow-md ${hasGold ? 'ring-4 ring-yellow-400 ring-offset-2' : ''} ${hasDark ? 'bg-gray-700 text-white' : 'bg-gradient-to-br from-emerald-400 to-teal-500 text-white'}`}>
-                  {(nickname || '?').slice(0,1).toUpperCase()}
-                </div>
+                <ProfileAvatar
+                  avatar={publicProfile.avatar}
+                  nickname={nickname}
+                  size="xl"
+                  className={`shadow-md ${hasGold ? 'ring-4 ring-yellow-400 ring-offset-2' : ''} ${hasDark ? 'bg-gray-700' : ''}`}
+                />
                 {/* 닉네임 */}
                 <div className="flex items-center gap-1.5">
                   {hasCrown && <span className="text-lg">👑</span>}
@@ -4107,6 +4257,7 @@ function CommunityFeature({ nickname, onHome }) {
         {!nav.board && !showMyPosts && !showProfile && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2 mb-1">
+              <ProfileAvatar avatar={publicProfile.avatar} nickname={nickname} size="sm" />
               <span className="text-gray-500 text-sm">안녕하세요,</span>
               {isEquipped('crown') && <span>👑</span>}
               <span className={`text-sm font-black ${isEquipped('rainbow') ? 'bg-gradient-to-r from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-500 bg-clip-text text-transparent' : 'text-emerald-600'}`}>{nickname}</span>
@@ -4277,6 +4428,7 @@ const NicknameScreen = ({ onConfirm, error }) => {
 // ============================================================
 const HomeScreen = ({ nickname, onChangeNickname }) => {
   const [activeTab, setActiveTab] = useState(null);
+  const publicProfile = usePublicProfile(nickname);
   const activeTabData = TABS.find((t) => t.id === activeTab);
   const gradients = {
     alarm: "from-rose-400 to-pink-500", weekly: "from-violet-400 to-purple-500",
@@ -4294,7 +4446,7 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
         <div className="flex items-center gap-2">
           <SyncStatusBadge />
           <button type="button" onClick={onChangeNickname} className="flex items-center gap-2 bg-white/10 rounded-full px-3 py-1 active:scale-95 transition-transform">
-            <User size={13} color="#c4b5fd" />
+            <ProfileAvatar avatar={publicProfile.avatar} nickname={nickname} size="xs" />
             <span className="text-indigo-200 text-xs font-medium">{nickname}</span>
             <span className="text-[10px] font-bold text-indigo-300">변경</span>
           </button>
@@ -4303,9 +4455,12 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
       <main className="flex-1 overflow-y-auto">
         {activeTab === null ? (
           <div className="p-5">
-            <p className="text-gray-400 text-sm mb-4">
-              <span className="text-indigo-600 font-semibold">{nickname}</span>님, 안녕하세요 👋
-            </p>
+            <div className="mb-4 flex items-center gap-3 rounded-3xl border border-indigo-100 bg-white px-4 py-3 shadow-sm">
+              <ProfileAvatar avatar={publicProfile.avatar} nickname={nickname} size="md" />
+              <p className="text-sm text-gray-500">
+                <span className="text-indigo-600 font-black">{nickname}</span>님, 안녕하세요
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
@@ -4323,7 +4478,7 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
           </div>
         ) : (
           <div className="h-full">
-            <activeTabData.Component nickname={nickname} onHome={() => setActiveTab(null)} />
+            <activeTabData.Component nickname={nickname} avatar={publicProfile.avatar} onHome={() => setActiveTab(null)} />
           </div>
         )}
       </main>

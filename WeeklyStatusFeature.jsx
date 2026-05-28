@@ -33,8 +33,10 @@ const ROOM_PLAYER_STALE_MS = 10000;
 const OFFLINE_GHOST_SECONDS = 760;
 const LOCAL_REALTIME_SERVER_PORT = 8787;
 const FIREBASE_SYNC_PATH = "everymcuWeeklyStatus";
+const INTEGRATED_PROFILE_PATH = "everymcuIntegrated";
 const PROBLEM_LANGUAGE = "Python";
 const CODE_INDENT = "    ";
+const DEFAULT_PROFILE_AVATAR = "🧑‍💻";
 
 const PANEL_ITEMS = [
   {
@@ -287,7 +289,7 @@ const badges = [
   },
 ];
 
-const WeeklyStatusFeature = ({ nickname, onHome }) => {
+const WeeklyStatusFeature = ({ nickname, avatar = DEFAULT_PROFILE_AVATAR, onHome }) => {
   const [activePanel, setActivePanel] = useState("battle");
   const [panelRevealed, setPanelRevealed] = useState(false);
   const [battleMode, setBattleMode] = useState("online");
@@ -299,6 +301,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
   const [roomCode, setRoomCode] = useState("EVERYMCU");
   const [roomConnected, setRoomConnected] = useState(false);
   const [opponentName, setOpponentName] = useState("");
+  const [opponentAvatar, setOpponentAvatar] = useState(DEFAULT_PROFILE_AVATAR);
   const [opponentLastSeen, setOpponentLastSeen] = useState(null);
   const [opponentOnlineState, setOpponentOnlineState] = useState("idle");
   const [presenceNow, setPresenceNow] = useState(() => Date.now());
@@ -355,6 +358,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
   const opponentConnected = Boolean(opponentLastSeen && presenceNow - opponentLastSeen < ROOM_PLAYER_STALE_MS);
   const hasWeeklyLocked = weeklyStatus === "submitted" || weeklyStatus === "abandoned";
   const nicknameKey = normalizeNicknameKey(nickname);
+  const playerAvatar = cleanProfileAvatar(avatar);
   const activePanelItem = PANEL_ITEMS.find((item) => item.id === activePanel) ?? PANEL_ITEMS[0];
   const activePanelIndex = Math.max(
     PANEL_ITEMS.findIndex((item) => item.id === activePanel),
@@ -412,6 +416,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
   const selectedOfflineProblem = getOfflineProblemById(selectedOfflineChallenge?.problemId);
   const selectedOfflineOpponentKey = selectedOfflineChallenge ? getChallengeOpponentKey(selectedOfflineChallenge, nicknameKey) : "";
   const selectedOfflineOpponentName = selectedOfflineChallenge ? getChallengeOpponentName(selectedOfflineChallenge, nicknameKey) : "";
+  const selectedOfflineOpponentAvatar = selectedOfflineChallenge ? getChallengeOpponentAvatar(selectedOfflineChallenge, nicknameKey) : DEFAULT_PROFILE_AVATAR;
   const myOfflineRecord = selectedOfflineChallenge?.records?.[nicknameKey] ?? null;
   const opponentOfflineRecord = selectedOfflineChallenge?.records?.[selectedOfflineOpponentKey] ?? null;
 
@@ -615,6 +620,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
   useEffect(() => {
     if (!roomConnected) {
       setOpponentName("");
+      setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
       setOpponentSolved(0);
       setOpponentOnlineState("idle");
       setOpponentLastSeen(null);
@@ -631,6 +637,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
       leaveSharedRoom({ playerId, roomCode: normalizedRoomCode });
       setRoomConnected(false);
       setOpponentName("");
+      setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
       setOpponentSolved(0);
       setOpponentOnlineState("idle");
       setOpponentLastSeen(null);
@@ -643,6 +650,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
 
     if (!opponent) {
       setOpponentName("");
+      setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
       setOpponentSolved(0);
       setOpponentOnlineState("idle");
       setOpponentLastSeen(null);
@@ -653,6 +661,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
 
     if (!opponentLastSeenValue || Date.now() - opponentLastSeenValue >= ROOM_PLAYER_STALE_MS) {
       setOpponentName("");
+      setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
       setOpponentSolved(0);
       setOpponentOnlineState("idle");
       setOpponentLastSeen(null);
@@ -660,6 +669,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     }
 
     setOpponentName(opponent.nickname || "상대");
+    setOpponentAvatar(cleanProfileAvatar(opponent.avatar));
     setOpponentSolved(Math.min(Number(opponent.solved ?? 0), TOTAL_ONLINE_PROBLEMS));
     setOpponentOnlineState(opponent.state || "idle");
     setOpponentLastSeen(opponentLastSeenValue);
@@ -672,6 +682,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
 
     channel.postMessage({
       type: "battle-state",
+      avatar: playerAvatar,
       senderId: playerId,
       nickname,
       solved: mySolved,
@@ -701,6 +712,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
 
       if (message.type === "battle-leave") {
         setOpponentName("");
+        setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
         setOpponentSolved(0);
         setOpponentOnlineState("idle");
         setOpponentLastSeen(null);
@@ -710,6 +722,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
       if (message.type !== "battle-state") return;
 
       setOpponentName(message.nickname || "상대");
+      setOpponentAvatar(cleanProfileAvatar(message.avatar));
       setOpponentSolved(Math.min(Number(message.solved ?? 0), TOTAL_ONLINE_PROBLEMS));
       setOpponentOnlineState(message.state || "idle");
       setOpponentLastSeen(Date.now());
@@ -717,6 +730,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
 
     channel.postMessage({
       type: "battle-state",
+      avatar: playerAvatar,
       senderId: playerId,
       nickname,
       solved: mySolved,
@@ -733,7 +747,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
         battleChannelRef.current = null;
       }
     };
-  }, [nickname, normalizedRoomCode, playerId, roomConnected]);
+  }, [nickname, normalizedRoomCode, playerAvatar, playerId, roomConnected]);
 
   useEffect(() => {
     if (!roomConnected) return undefined;
@@ -743,17 +757,18 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     }, 2000);
 
     return () => window.clearInterval(heartbeat);
-  }, [roomConnected, mySolved, onlineRemaining, onlineState, normalizedRoomCode]);
+  }, [roomConnected, mySolved, onlineRemaining, onlineState, normalizedRoomCode, playerAvatar]);
 
   useEffect(() => {
     if (!roomConnected) return;
     broadcastBattleState();
-  }, [roomConnected, mySolved, onlineRemaining, onlineState, normalizedRoomCode]);
+  }, [roomConnected, mySolved, onlineRemaining, onlineState, normalizedRoomCode, playerAvatar]);
 
   useEffect(() => {
     if (!roomConnected) return;
 
     sendSharedPlayerState({
+      avatar: playerAvatar,
       nickname,
       playerId,
       remaining: onlineRemaining,
@@ -763,7 +778,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     }).then((ok) => {
       if (ok) setSharedConnected(true);
     });
-  }, [mySolved, nickname, normalizedRoomCode, onlineRemaining, onlineState, playerId, roomConnected]);
+  }, [mySolved, nickname, normalizedRoomCode, onlineRemaining, onlineState, playerAvatar, playerId, roomConnected]);
 
   useEffect(() => {
     if (onlineState !== "matching") return;
@@ -861,6 +876,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     setRoomConnected(true);
     setOpponentSolved(0);
     setOpponentName("");
+    setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
     setOpponentOnlineState("idle");
     setOpponentLastSeen(null);
     setOnlineMessage(`방 ${normalizedRoomCode}에 입장했습니다. 같은 방 코드의 상대와 실시간으로 연결됩니다.`);
@@ -872,6 +888,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     setRoomConnected(false);
     setOpponentSolved(0);
     setOpponentName("");
+    setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
     setOpponentOnlineState("idle");
     setOpponentLastSeen(null);
     setOnlineState("idle");
@@ -913,6 +930,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     setOpponentSolved(0);
     setOnlineResultRecorded(false);
     setOpponentName("");
+    setOpponentAvatar(DEFAULT_PROFILE_AVATAR);
     setOpponentOnlineState("idle");
     setOpponentLastSeen(null);
     setOnlineProblemIndex(0);
@@ -920,7 +938,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     setOnlineMessage("방에 입장한 뒤 대전 신청을 눌러주세요.");
   };
 
-  const handleSendOfflineChallenge = () => {
+  const handleSendOfflineChallenge = async () => {
     const targetNickname = offlineOpponentInput.trim();
     const targetKey = normalizeNicknameKey(targetNickname);
 
@@ -944,7 +962,13 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
       return;
     }
 
-    const challenge = createOfflineChallenge({ fromNickname: nickname, toNickname: targetNickname });
+    const targetAvatar = await fetchPublicProfileAvatar(targetNickname);
+    const challenge = createOfflineChallenge({
+      fromAvatar: playerAvatar,
+      fromNickname: nickname,
+      toAvatar: targetAvatar,
+      toNickname: targetNickname,
+    });
 
     setOfflineChallenges((current) => [challenge, ...current]);
     setSelectedOfflineChallengeId(challenge.id);
@@ -996,6 +1020,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     const now = new Date().toISOString();
     const patch = {
       status: nextStatus,
+      toAvatar: playerAvatar,
       updatedAt: now,
       ...(nextStatus === "accepted" ? { acceptedAt: now } : { declinedAt: now }),
     };
@@ -1047,6 +1072,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
     }
 
     const record = {
+      avatar: playerAvatar,
       code: offlineCode,
       completedAt: new Date().toISOString(),
       nickname,
@@ -1262,6 +1288,7 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
                 offlineElapsed={offlineElapsed}
                 offlineMessage={offlineMessage}
                 offlineOpponentInput={offlineOpponentInput}
+                offlineOpponentAvatar={selectedOfflineOpponentAvatar}
                 offlineOpponentName={selectedOfflineOpponentName}
                 offlineOpponentRecord={opponentOfflineRecord}
                 offlineProblem={selectedOfflineProblem}
@@ -1278,12 +1305,14 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
                 onlineResult={onlineResult}
                 onlineState={onlineState}
                 opponentConnected={opponentConnected}
+                opponentAvatar={opponentAvatar}
                 opponentName={opponentName}
                 opponentOnlineState={opponentOnlineState}
                 opponentProgress={opponentProgress}
                 opponentSolved={opponentSolved}
                 roomCode={roomCode}
                 roomConnected={roomConnected}
+                playerAvatar={playerAvatar}
                 setBattleMode={setBattleMode}
                 setOnlineCode={setOnlineCode}
                 setRoomCode={setRoomCode}
@@ -1360,6 +1389,7 @@ const BattlePanel = ({
   offlineElapsed,
   offlineMessage,
   offlineOpponentInput,
+  offlineOpponentAvatar,
   offlineOpponentName,
   offlineOpponentRecord,
   offlineProblem,
@@ -1376,12 +1406,14 @@ const BattlePanel = ({
   onlineResult,
   onlineState,
   opponentConnected,
+  opponentAvatar,
   opponentName,
   opponentOnlineState,
   opponentProgress,
   opponentSolved,
   roomCode,
   roomConnected,
+  playerAvatar,
   setBattleMode,
   setOnlineCode,
   setRoomCode,
@@ -1447,12 +1479,14 @@ const BattlePanel = ({
         onlineResult={onlineResult}
         onlineState={onlineState}
         opponentConnected={opponentConnected}
+        opponentAvatar={opponentAvatar}
         opponentName={opponentName}
         opponentOnlineState={opponentOnlineState}
         opponentProgress={opponentProgress}
         opponentSolved={opponentSolved}
         roomCode={roomCode}
         roomConnected={roomConnected}
+        playerAvatar={playerAvatar}
         setOnlineCode={setOnlineCode}
         setRoomCode={setRoomCode}
         sharedConnected={sharedConnected}
@@ -1470,6 +1504,7 @@ const BattlePanel = ({
         offlineElapsed={offlineElapsed}
         offlineMessage={offlineMessage}
         offlineOpponentInput={offlineOpponentInput}
+        offlineOpponentAvatar={offlineOpponentAvatar}
         offlineOpponentName={offlineOpponentName}
         offlineOpponentRecord={offlineOpponentRecord}
         offlineProblem={offlineProblem}
@@ -1505,12 +1540,14 @@ const OnlineBattleCard = ({
   onlineResult,
   onlineState,
   opponentConnected,
+  opponentAvatar,
   opponentName,
   opponentOnlineState,
   opponentProgress,
   opponentSolved,
   roomCode,
   roomConnected,
+  playerAvatar,
   setOnlineCode,
   setRoomCode,
   sharedConnected,
@@ -1603,8 +1640,9 @@ const OnlineBattleCard = ({
     {hasBattleStarted && (
       <>
         <div className="mt-4 space-y-3">
-          <ProgressRow label="나" value={`${mySolved}/${TOTAL_ONLINE_PROBLEMS}`} progress={onlineProgress} color="bg-indigo-500" />
+          <ProgressRow avatar={playerAvatar} label="나" value={`${mySolved}/${TOTAL_ONLINE_PROBLEMS}`} progress={onlineProgress} color="bg-indigo-500" />
           <ProgressRow
+            avatar={opponentConnected ? opponentAvatar : DEFAULT_PROFILE_AVATAR}
             label={opponentConnected ? (opponentName ? `상대 (${opponentName})` : "상대") : "상대 대기"}
             value={`${opponentSolved}/${TOTAL_ONLINE_PROBLEMS}`}
             progress={opponentProgress}
@@ -1668,6 +1706,7 @@ const OfflineBattleCard = ({
   offlineElapsed,
   offlineMessage,
   offlineOpponentInput,
+  offlineOpponentAvatar,
   offlineOpponentName,
   offlineOpponentRecord,
   offlineProblem,
@@ -1777,7 +1816,10 @@ const OfflineBattleCard = ({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-black text-violet-700">선택된 기록전 · {getOfflineChallengeStatusText(selectedOfflineChallenge.status)}</p>
-                <h3 className="mt-1 text-lg font-black text-gray-900">{offlineOpponentName}님과의 1:1 기록전</h3>
+                <div className="mt-1 flex items-center gap-2">
+                  <AvatarBadge avatar={offlineOpponentAvatar} size="sm" />
+                  <h3 className="min-w-0 truncate text-lg font-black text-gray-900">{offlineOpponentName}님과의 1:1 기록전</h3>
+                </div>
                 <p className="mt-1 text-sm font-semibold leading-6 text-violet-700">
                   아래 문제와 기록은 이 대전장 안에서만 따로 저장됩니다.
                 </p>
@@ -1886,6 +1928,7 @@ const ChallengeList = ({ emptyText, items, nicknameKey, selectedId, title, onAcc
         const isSelected = selectedId === challenge.id && !isLocked;
         const isIncomingPending = challenge.toKey === nicknameKey && challenge.status === "pending";
         const opponentName = getChallengeOpponentName(challenge, nicknameKey);
+        const opponentAvatar = getChallengeOpponentAvatar(challenge, nicknameKey);
         const opponentKey = getChallengeOpponentKey(challenge, nicknameKey);
         const myRecord = challenge.records?.[nicknameKey];
         const opponentRecord = challenge.records?.[opponentKey];
@@ -1908,14 +1951,17 @@ const ChallengeList = ({ emptyText, items, nicknameKey, selectedId, title, onAcc
                 type="button"
                 onClick={() => onSelect(challenge.id)}
                 disabled={isLocked}
-                className={`min-w-0 flex-1 text-left ${isLocked ? "cursor-not-allowed" : ""}`}
+                className={`flex min-w-0 flex-1 items-center gap-2 text-left ${isLocked ? "cursor-not-allowed" : ""}`}
               >
-                <p className="truncate text-sm font-black text-gray-900">{opponentName}</p>
-                {challengeCaption && (
-                  <p className={`mt-0.5 truncate text-[11px] font-extrabold ${challengeCaptionClass}`}>
-                    {challengeCaption}
-                  </p>
-                )}
+                <AvatarBadge avatar={opponentAvatar} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-black text-gray-900">{opponentName}</span>
+                  {challengeCaption && (
+                    <span className={`mt-0.5 block truncate text-[11px] font-extrabold ${challengeCaptionClass}`}>
+                      {challengeCaption}
+                    </span>
+                  )}
+                </span>
               </button>
               <div className="flex shrink-0 items-center gap-1">
                 {isSelected && (
@@ -2289,10 +2335,22 @@ const StreakPanel = ({ badges: badgeList, stats }) => (
   </div>
 );
 
-const ProgressRow = ({ label, value, progress, color }) => (
+const AvatarBadge = ({ avatar, size = "sm" }) => {
+  const sizeClass = size === "xs" ? "h-5 w-5 text-[11px] rounded-lg" : "h-7 w-7 text-sm rounded-xl";
+  return (
+    <span className={`inline-flex shrink-0 items-center justify-center bg-white shadow-sm ring-1 ring-indigo-100 ${sizeClass}`}>
+      {cleanProfileAvatar(avatar)}
+    </span>
+  );
+};
+
+const ProgressRow = ({ avatar, label, value, progress, color }) => (
   <div>
     <div className="mb-1.5 flex items-center justify-between text-[13px] font-bold text-gray-700">
-      <span className="max-w-[170px] truncate">{label}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        {avatar && <AvatarBadge avatar={avatar} size="xs" />}
+        <span className="max-w-[170px] truncate">{label}</span>
+      </span>
       <span>{value}</span>
     </div>
     <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
@@ -2648,7 +2706,7 @@ const saveSolutionVotes = (nickname, votes) => {
 const getFirebaseDatabaseUrl = () => {
   const envUrl = import.meta.env?.VITE_FIREBASE_DATABASE_URL;
   const windowUrl = typeof window !== "undefined" ? window.EVERYMCU_FIREBASE_DATABASE_URL : "";
-  const url = String(envUrl || windowUrl || "").trim();
+  const url = String(envUrl || windowUrl || "https://every-mcu-default-rtdb.asia-southeast1.firebasedatabase.app").trim();
 
   return url.replace(/\/$/, "");
 };
@@ -2768,7 +2826,28 @@ const getFirebasePath = (...segments) => {
   return `${databaseUrl}/${path}.json`;
 };
 
+const getIntegratedProfilePath = (...segments) => {
+  const databaseUrl = getFirebaseDatabaseUrl();
+  if (!databaseUrl) return "";
+
+  const path = [INTEGRATED_PROFILE_PATH, "publicProfiles", ...segments].map((segment) => toFirebaseKey(segment)).join("/");
+  return `${databaseUrl}/${path}.json`;
+};
+
 const toFirebaseKey = (value) => String(value || "default").trim().replace(/[.#$/[\]]/g, "-") || "default";
+
+const fetchPublicProfileAvatar = async (nickname) => {
+  try {
+    const url = getIntegratedProfilePath(nickname);
+    if (!url) return DEFAULT_PROFILE_AVATAR;
+    const response = await fetchFirebase(`${url}?ts=${Date.now()}`);
+    if (!response.ok) return DEFAULT_PROFILE_AVATAR;
+    const data = await response.json();
+    return cleanProfileAvatar(data?.avatar);
+  } catch {
+    return DEFAULT_PROFILE_AVATAR;
+  }
+};
 
 const getSharedEventsUrl = () => {
   if (getSharedMode() === "firebase") return getFirebasePath();
@@ -2863,9 +2942,10 @@ const fetchSharedState = async () => {
   return normalizeSharedState(await response.json());
 };
 
-const sendSharedPlayerState = async ({ nickname, playerId, remaining, roomCode, solved, state }) => {
+const sendSharedPlayerState = async ({ avatar, nickname, playerId, remaining, roomCode, solved, state }) => {
   try {
     const playerState = {
+      avatar: cleanProfileAvatar(avatar),
       lastSeen: Date.now(),
       nickname,
       remaining,
@@ -2968,7 +3048,7 @@ const addLocalSolution = (solution, setSolutions) => {
   ]);
 };
 
-const createOfflineChallenge = ({ fromNickname, toNickname }) => {
+const createOfflineChallenge = ({ fromAvatar, fromNickname, toAvatar, toNickname }) => {
   const createdAt = new Date().toISOString();
   const problem = pickOfflineProblem(fromNickname, toNickname, createdAt);
 
@@ -2977,12 +3057,14 @@ const createOfflineChallenge = ({ fromNickname, toNickname }) => {
     createdAt,
     declinedAt: null,
     from: fromNickname,
+    fromAvatar: cleanProfileAvatar(fromAvatar),
     fromKey: normalizeNicknameKey(fromNickname),
     id: `offline-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     problemId: problem.id,
     records: {},
     status: "pending",
     to: toNickname,
+    toAvatar: cleanProfileAvatar(toAvatar),
     toKey: normalizeNicknameKey(toNickname),
     updatedAt: createdAt,
   };
@@ -3002,6 +3084,14 @@ const normalizeNicknameKey = (value) => String(value || "guest").trim().toLowerC
 const getChallengeOpponentKey = (challenge, nicknameKey) => (challenge.fromKey === nicknameKey ? challenge.toKey : challenge.fromKey);
 
 const getChallengeOpponentName = (challenge, nicknameKey) => (challenge.fromKey === nicknameKey ? challenge.to : challenge.from);
+
+const cleanProfileAvatar = (avatar) => String(avatar || DEFAULT_PROFILE_AVATAR).trim().slice(0, 8) || DEFAULT_PROFILE_AVATAR;
+
+const getChallengeOpponentAvatar = (challenge, nicknameKey) => (
+  challenge.fromKey === nicknameKey
+    ? cleanProfileAvatar(challenge.toAvatar || challenge.records?.[challenge.toKey]?.avatar)
+    : cleanProfileAvatar(challenge.fromAvatar || challenge.records?.[challenge.fromKey]?.avatar)
+);
 
 const hasSentOfflineChallengeTo = (challenges, fromKey, toKey) =>
   challenges.some((challenge) => challenge.fromKey === fromKey && challenge.toKey === toKey);
