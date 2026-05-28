@@ -2653,6 +2653,101 @@ const getFirebaseDatabaseUrl = () => {
   return url.replace(/\/$/, "");
 };
 
+const getFirebaseAuthApiKey = () => {
+  const envKey = import.meta.env?.VITE_FIREBASE_API_KEY;
+  const windowKey = typeof window !== "undefined" ? window.EVERYMCU_FIREBASE_API_KEY : "";
+
+  return String(envKey || windowKey || "AIzaSyA-6zuZp-AFrk4DD29D0nO5hAzqaphiBd8").trim();
+};
+
+const AUTH_SESSION_KEY = "everymcu-auth-session-v1";
+let cloudAuthSession = (() => {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(AUTH_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+})();
+let cloudAuthPromise = null;
+
+const saveCloudAuthSession = (session) => {
+  cloudAuthSession = session;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const isFreshAuthSession = (session) => session?.idToken && Number(session.expiresAt || 0) > Date.now() + 60000;
+
+const createAnonymousAuthSession = async () => {
+  const apiKey = getFirebaseAuthApiKey();
+  if (!apiKey) return null;
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ returnSecureToken: true }),
+  });
+  if (!response.ok) throw new Error("Anonymous auth failed.");
+  const data = await response.json();
+  const session = {
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    uid: data.localId,
+    expiresAt: Date.now() + Number(data.expiresIn || 3600) * 1000,
+  };
+  saveCloudAuthSession(session);
+  return session;
+};
+
+const refreshCloudAuthSession = async (refreshToken) => {
+  const apiKey = getFirebaseAuthApiKey();
+  if (!apiKey || !refreshToken) return null;
+  const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+  });
+  if (!response.ok) throw new Error("Auth refresh failed.");
+  const data = await response.json();
+  const session = {
+    idToken: data.id_token,
+    refreshToken: data.refresh_token,
+    uid: data.user_id,
+    expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
+  };
+  saveCloudAuthSession(session);
+  return session;
+};
+
+const ensureCloudAuth = async () => {
+  if (isFreshAuthSession(cloudAuthSession)) return cloudAuthSession;
+  if (!cloudAuthPromise) {
+    cloudAuthPromise = (async () => {
+      try {
+        if (cloudAuthSession?.refreshToken) return await refreshCloudAuthSession(cloudAuthSession.refreshToken);
+      } catch {
+        cloudAuthSession = null;
+      }
+      return createAnonymousAuthSession();
+    })().finally(() => {
+      cloudAuthPromise = null;
+    });
+  }
+  return cloudAuthPromise;
+};
+
+const fetchFirebase = async (url, options = {}) => {
+  const session = await ensureCloudAuth();
+  const authedUrl = session?.idToken ? `${url}${url.includes("?") ? "&" : "?"}auth=${encodeURIComponent(session.idToken)}` : url;
+
+  return fetch(authedUrl, options);
+};
+
 const getSharedMode = () => (getFirebaseDatabaseUrl() ? "firebase" : "local");
 
 const getSharedModeLabel = (mode) => (mode === "firebase" ? "클라우드 공유" : "로컬 공유");
@@ -2755,7 +2850,7 @@ const fetchSharedState = async () => {
   const firebaseUrl = getFirebaseDatabaseUrl();
 
   if (firebaseUrl) {
-    const response = await fetch(`${getFirebasePath()}?ts=${Date.now()}`);
+    const response = await fetchFirebase(`${getFirebasePath()}?ts=${Date.now()}`);
     if (!response.ok) throw new Error("Failed to load cloud state.");
 
     return normalizeSharedState(await response.json());
@@ -2782,7 +2877,7 @@ const sendSharedPlayerState = async ({ nickname, playerId, remaining, roomCode, 
       ? getFirebasePath("rooms", roomCode, "players", playerId)
       : `${getLocalRealtimeApiBase()}/api/rooms/${encodeURIComponent(roomCode)}/players/${encodeURIComponent(playerId)}`;
 
-    const response = await fetch(url, {
+    const response = await (firebaseUrl ? fetchFirebase : fetch)(url, {
       body: JSON.stringify(playerState),
       headers: { "Content-Type": "application/json" },
       method: firebaseUrl ? "PUT" : "POST",
@@ -2801,7 +2896,7 @@ const leaveSharedRoom = async ({ playerId, roomCode }) => {
       ? getFirebasePath("rooms", roomCode, "players", playerId)
       : `${getLocalRealtimeApiBase()}/api/rooms/${encodeURIComponent(roomCode)}/players/${encodeURIComponent(playerId)}`;
 
-    await fetch(url, {
+    await (firebaseUrl ? fetchFirebase : fetch)(url, {
       method: "DELETE",
     });
   } catch {
@@ -2820,7 +2915,7 @@ const createSharedSolution = async (solution) => {
     };
     const url = firebaseUrl ? getFirebasePath("solutions", id) : `${getLocalRealtimeApiBase()}/api/solutions`;
 
-    const response = await fetch(url, {
+    const response = await (firebaseUrl ? fetchFirebase : fetch)(url, {
       body: JSON.stringify(payload),
       headers: { "Content-Type": "application/json" },
       method: firebaseUrl ? "PUT" : "POST",
@@ -2839,13 +2934,13 @@ const voteSharedSolution = async (solutionId, metric, delta) => {
 
     if (firebaseUrl) {
       const solutionUrl = getFirebasePath("solutions", solutionId);
-      const response = await fetch(`${solutionUrl}?ts=${Date.now()}`);
+      const response = await fetchFirebase(`${solutionUrl}?ts=${Date.now()}`);
       const solution = response.ok ? await response.json() : null;
       const legacyMetric = safeMetric !== "likes" && Number(solution?.voteVersion ?? 0) < 2 && solution?.efficiency === undefined;
       const currentValue = legacyMetric ? 0 : Number(solution?.[safeMetric] ?? 0);
       const nextValue = Math.max(0, currentValue + delta);
 
-      await fetch(solutionUrl, {
+      await fetchFirebase(solutionUrl, {
         body: JSON.stringify({ [safeMetric]: nextValue, voteVersion: 2 }),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",
@@ -2930,7 +3025,7 @@ const createSharedOfflineChallenge = async (challenge) => {
     const firebaseUrl = getFirebaseDatabaseUrl();
     const url = firebaseUrl ? getFirebasePath("offlineChallenges", challenge.id) : `${getLocalRealtimeApiBase()}/api/offline-challenges`;
 
-    const response = await fetch(url, {
+    const response = await (firebaseUrl ? fetchFirebase : fetch)(url, {
       body: JSON.stringify(challenge),
       headers: { "Content-Type": "application/json" },
       method: firebaseUrl ? "PUT" : "POST",
@@ -2947,7 +3042,7 @@ const updateSharedOfflineChallenge = async (challengeId, patch) => {
     const firebaseUrl = getFirebaseDatabaseUrl();
     const url = firebaseUrl ? getFirebasePath("offlineChallenges", challengeId) : `${getLocalRealtimeApiBase()}/api/offline-challenges/${encodeURIComponent(challengeId)}`;
 
-    const response = await fetch(url, {
+    const response = await (firebaseUrl ? fetchFirebase : fetch)(url, {
       body: JSON.stringify(patch),
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
@@ -2963,7 +3058,7 @@ const deleteSharedOfflineChallenge = async (challengeId) => {
   try {
     const firebaseUrl = getFirebaseDatabaseUrl();
     const url = firebaseUrl ? getFirebasePath("offlineChallenges", challengeId) : `${getLocalRealtimeApiBase()}/api/offline-challenges/${encodeURIComponent(challengeId)}`;
-    const response = await fetch(url, {
+    const response = await (firebaseUrl ? fetchFirebase : fetch)(url, {
       method: "DELETE",
     });
 
@@ -2979,13 +3074,13 @@ const saveSharedOfflineRecord = async (challengeId, nicknameKey, record, status)
     const firebaseUrl = getFirebaseDatabaseUrl();
 
     if (firebaseUrl) {
-      const recordResponse = await fetch(getFirebasePath("offlineChallenges", challengeId, "records", nicknameKey), {
+      const recordResponse = await fetchFirebase(getFirebasePath("offlineChallenges", challengeId, "records", nicknameKey), {
         body: JSON.stringify(record),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       });
 
-      const statusResponse = await fetch(getFirebasePath("offlineChallenges", challengeId), {
+      const statusResponse = await fetchFirebase(getFirebasePath("offlineChallenges", challengeId), {
         body: JSON.stringify({ status, updatedAt }),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",

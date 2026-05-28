@@ -1,0 +1,29 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "everymcuIntegrated": {
+      "nicknameClaims": {
+        "$nickname": {
+          ".read": "auth != null",
+          ".write": "auth != null && newData.child('ownerUid').val() === auth.uid && (!data.exists() || data.child('ownerUid').val() === auth.uid)",
+          ".validate": "newData.hasChildren(['ownerUid', 'nickname', 'updatedAt'])"
+        }
+      },
+      "users": {
+        "$nickname": {
+          ".read": "auth != null && root.child('everymcuIntegrated/nicknameClaims/' + $nickname + '/ownerUid').val() === auth.uid",
+          ".write": "auth != null && root.child('everymcuIntegrated/nicknameClaims/' + $nickname + '/ownerUid').val() === auth.uid"
+        }
+      },
+      "community": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "everymcuWeeklyStatus": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
