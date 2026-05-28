@@ -1,4 +1,4 @@
-const CACHE_NAME = "everymcu-integrated-v1";
+const CACHE_NAME = "everymcu-integrated-v2";
 const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.svg", "./icon-512.svg", "./weekly/", "./weekly/index.html"];
 
 self.addEventListener("install", event => {

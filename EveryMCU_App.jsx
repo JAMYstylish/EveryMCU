@@ -337,12 +337,26 @@ const TabButton = ({ active, icon: Icon, label, onClick }) => (
   </button>
 );
 
+const readNicknameFromUrl = () => {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("nick")?.trim() || "";
+};
+
 export default function App() {
-  const [screen, setScreen] = useState("splash");
-  const [nickname, setNickname] = useState("");
+  const urlNickname = readNicknameFromUrl();
+  const [screen, setScreen] = useState(urlNickname ? "weekly" : "splash");
+  const [nickname, setNickname] = useState(urlNickname);
 
   const handleNicknameConfirm = (name) => {
     setNickname(name);
+    setScreen("home");
+  };
+
+  const handleWeeklyHome = () => {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: "EVERYMCU_GO_HOME" }, "*");
+      return;
+    }
     setScreen("home");
   };
 
@@ -352,6 +366,10 @@ export default function App() {
 
   if (screen === "nickname") {
     return <NicknameScreen onConfirm={handleNicknameConfirm} />;
+  }
+
+  if (screen === "weekly") {
+    return <WeeklyStatusFeature nickname={nickname || "guest"} onHome={handleWeeklyHome} />;
   }
 
   return <HomeScreen nickname={nickname} />;

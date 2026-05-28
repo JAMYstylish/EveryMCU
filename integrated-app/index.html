@@ -122,6 +122,7 @@ window.__ICON_SVGS = {
 const FIREBASE_DATABASE_URL = (window.EVERYMCU_FIREBASE_DATABASE_URL || "https://every-mcu-default-rtdb.asia-southeast1.firebasedatabase.app").replace(/\/+$/, "");
 const FIREBASE_ROOT_PATH = "everymcuIntegrated";
 const cloudSegment = value => encodeURIComponent(String(value ?? "guest").trim().replace(/[.#$\[\]\/]/g, "_") || "guest");
+const scopedLocalKey = (base, nickname) => `${base}-${cloudSegment(nickname || "guest")}`;
 const cloudUrl = (...parts) => {
   const path = [FIREBASE_ROOT_PATH, ...parts.flat().filter(Boolean).map(cloudSegment)].join("/");
   return `${FIREBASE_DATABASE_URL}/${path}.json`;
@@ -296,6 +297,7 @@ const AlarmFeature = ({ nickname, onHome }) => {
   const [pyReady, setPyReady] = useState(false);
   const [running, setRunning] = useState(false);
   const [testStatus, setTestStatus] = useState("");
+  const [alarmCloudReady, setAlarmCloudReady] = useState(false);
 
   const pyRef = useRef(null);
   const audioRef = useRef(null);
@@ -306,6 +308,30 @@ const AlarmFeature = ({ nickname, onHome }) => {
   useEffect(() => {
     ensurePyodide().then((py) => { pyRef.current = py; setPyReady(true); }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setAlarmCloudReady(false);
+    const fallback = (() => {
+      try { return JSON.parse(localStorage.getItem(scopedLocalKey("everymcu-alarms", nickname)) || "null"); }
+      catch { return null; }
+    })();
+    cloudGet(["users", nickname || "guest", "alarms"], null).then(data => {
+      if (!alive) return;
+      const source = data || fallback || {};
+      setAlarms(Array.isArray(source.alarms) ? source.alarms : []);
+      setSoundEnabled(source.soundEnabled ?? true);
+    }).finally(() => { if (alive) setAlarmCloudReady(true); });
+    return () => { alive = false; };
+  }, [nickname]);
+
+  useEffect(() => {
+    if (!alarmCloudReady) return;
+    const data = { alarms, soundEnabled, updatedAt: cloudNow() };
+    try { localStorage.setItem(scopedLocalKey("everymcu-alarms", nickname), JSON.stringify(data)); } catch {}
+    const id = setTimeout(() => cloudPut(["users", nickname || "guest", "alarms"], data), 300);
+    return () => clearTimeout(id);
+  }, [alarmCloudReady, alarms, soundEnabled, nickname]);
 
   // 브라우저 오디오 정책 대응: 첫 사용자 상호작용 때 AudioContext를 미리 생성·resume 해둔다.
   // 이렇게 해야 알람 시각이 됐을 때 (추가 상호작용 없이) 즉시 소리가 난다.
@@ -831,8 +857,13 @@ const STAGES = [
 ];
 
 const TOTAL_XP=100,MAX_LIVES=5,HEART_RECHARGE_MS=2*60*1000,STORAGE_KEY="codingLearnerData_v8";
-function loadStorage(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||"{}")}catch{return{}}}
-function saveStorage(d){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d))}catch{}}
+const defaultLearningState = (nickname = "guest") => ({
+  solvedMap:{}, xp:0, level:1, lives:MAX_LIVES, streak:0, lastDate:"",
+  nextRechargeAt:0, attendanceDates:[], submissionHistory:{},
+  nickname, avatar:"🧑‍💻", profileDone:true,
+});
+function loadStorage(nickname){try{return JSON.parse(localStorage.getItem(scopedLocalKey(STORAGE_KEY,nickname))||"{}")}catch{return{}}}
+function saveStorage(nickname,d){try{localStorage.setItem(scopedLocalKey(STORAGE_KEY,nickname),JSON.stringify(d))}catch{}}
 function getTodayStr(){return new Date().toISOString().slice(0,10);}
 
 // ── 수정2: 연속 출석 버그 수정 ──
@@ -1105,8 +1136,7 @@ function ProblemCard({problem,index,globalIndex,solved,disabled,submissionCount,
 }
 
 function LearningTrackerFeatureCore({nickname,setNickname,avatar,setAvatar,onHome}){
-  const saved=loadStorage();
-  const savedRef=useRef(saved);
+  const saved=loadStorage(nickname);
   const [view,setView]=useState("home");
   const [selectedStage,setSelectedStage]=useState(null);
   const [selectedProblem,setSelectedProblem]=useState(null);
@@ -1131,46 +1161,57 @@ function LearningTrackerFeatureCore({nickname,setNickname,avatar,setAvatar,onHom
   const [submissionHistory,setSubmissionHistory]=useState(saved.submissionHistory||{});
   const taRef=useRef(null);
   const [learningCloudReady,setLearningCloudReady]=useState(false);
+  const attendanceAppliedRef=useRef("");
+  const applyLearningState=(data={})=>{
+    const next={...defaultLearningState(nickname),...data};
+    setStreak(next.streak||0);
+    setLastDate(next.lastDate||"");
+    setAttendanceDates(Array.isArray(next.attendanceDates)?next.attendanceDates:[]);
+    setXp(next.xp??0);
+    setLevel(next.level??1);
+    setLives(next.lives??MAX_LIVES);
+    setNextRechargeAt(next.nextRechargeAt||0);
+    setSolvedMap(next.solvedMap||{});
+    setSubmissionHistory(next.submissionHistory||{});
+    setAvatar(next.avatar||"🧑‍💻");
+  };
 
   useEffect(()=>{initPy(setPyStatus);},[]);
   useEffect(()=>{
     let alive=true;
+    setLearningCloudReady(false);
+    const fallback={...defaultLearningState(nickname),...loadStorage(nickname)};
     cloudGet(["users", nickname || "guest", "learning"], null).then(data=>{
-      if(!alive || !data) return;
-      setStreak(data.streak||0);
-      setLastDate(data.lastDate||"");
-      setAttendanceDates(Array.isArray(data.attendanceDates)?data.attendanceDates:[]);
-      setXp(data.xp??0);
-      setLevel(data.level??1);
-      setLives(data.lives??MAX_LIVES);
-      setNextRechargeAt(data.nextRechargeAt||0);
-      setSolvedMap(data.solvedMap||{});
-      setSubmissionHistory(data.submissionHistory||{});
-      if(data.avatar) setAvatar(data.avatar);
+      if(!alive) return;
+      applyLearningState(data || fallback);
+      setView("home");
+      setSelectedStage(null);
+      setSelectedProblem(null);
+      setCode("");
+      setGradeResults(null);
     }).finally(()=>{if(alive)setLearningCloudReady(true);});
     return()=>{alive=false;};
   },[nickname]);
 
-  // ── 수정2: 연속 출석 로직 — 마운트 시 한 번만 실행, calcStreak 수정 버전 적용 ──
   useEffect(()=>{
+    if(!learningCloudReady)return;
+    const key=nickname||"guest";
+    if(attendanceAppliedRef.current===key)return;
+    attendanceAppliedRef.current=key;
     const today=getTodayStr();
-    const origLD=savedRef.current.lastDate||"";
-    const origS=savedRef.current.streak||0;
-    if(origLD!==today){
-      // 오늘 처음 접속: streak 재계산 후 출석 날짜 추가
-      setStreak(calcStreak(origLD,origS));
+    if(lastDate!==today){
+      setStreak(prev=>calcStreak(lastDate,prev));
       setLastDate(today);
       setAttendanceDates(prev=>prev.includes(today)?prev:[...prev,today]);
     }
-    // origLD===today 이면 이미 오늘 출석 처리됨 → 아무것도 하지 않음
-  },[]);
+  },[learningCloudReady,nickname,lastDate]);
 
   useEffect(()=>{if(lives>=MAX_LIVES)return;const id=setInterval(()=>{if(Date.now()>=nextRechargeAt){setLives(prev=>{const nl=Math.min(MAX_LIVES,prev+1);if(nl<MAX_LIVES)setNextRechargeAt(Date.now()+HEART_RECHARGE_MS);else setNextRechargeAt(0);return nl;});}}  ,1000);return()=>clearInterval(id);},[lives,nextRechargeAt]);
   useEffect(()=>{setLevel(Math.floor(xp/TOTAL_XP)+1);},[xp]);
   useEffect(()=>{const next={...solvedMap};let c=false;STAGES.forEach((s,i)=>{if(!next[`stage_${i}_done`]&&s.problems.every(p=>next[p.id])){next[`stage_${i}_done`]=true;c=true;}});if(c)setSolvedMap(next);},[solvedMap]);
   useEffect(()=>{
     const data={solvedMap,xp,level,lives,streak,lastDate,nextRechargeAt,attendanceDates,submissionHistory,nickname,avatar,profileDone:true};
-    saveStorage(data);
+    saveStorage(nickname,data);
     if(!learningCloudReady)return;
     const id=setTimeout(()=>cloudPut(["users", nickname || "guest", "learning"], {...data, updatedAt:cloudNow()}),450);
     return()=>clearTimeout(id);
@@ -1325,11 +1366,9 @@ function LearningTrackerFeatureCore({nickname,setNickname,avatar,setAvatar,onHom
 
 // ── 학습추적 어댑터: avatar/setNickname 상태를 내부에서 관리 ──
 function LearningTrackerFeature({ nickname, onHome }) {
-  const [avatar, setAvatar] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("everymcu_learning_v1") || "{}").avatar || "🧑‍💻"; }
-    catch { return "🧑‍💻"; }
-  });
+  const [avatar, setAvatar] = useState("🧑‍💻");
   const [localNick, setLocalNick] = useState(nickname);
+  useEffect(() => setLocalNick(nickname), [nickname]);
   return (
     <LearningTrackerFeatureCore
       nickname={localNick}
@@ -1662,6 +1701,7 @@ function LearningTrackerFeature({ nickname, onHome }) {
       const [bmks,      setBmks]      = useState({});
       const [kwFilter,  setKwFilter]  = useState(null);
       const [trendOpen, setTrendOpen] = useState(true);
+      const [newsCloudReady, setNewsCloudReady] = useState(false);
       const fetchingRef = useRef(new Set());
 
       const doFetch = useCallback(async (cat) => {
@@ -1696,6 +1736,31 @@ function LearningTrackerFeature({ nickname, onHome }) {
       useEffect(() => { 
         if (tab !== "AI추천" && tab !== "전체" && !cache[tab]) doFetch(tab); 
       }, [tab, cache, doFetch]); 
+
+      useEffect(() => {
+        let alive = true;
+        setNewsCloudReady(false);
+        cloudGet(["users", nickname || "guest", "newsState"], null).then(data => {
+          if (!alive) return;
+          setReadSet(new Set(Array.isArray(data?.readIds) ? data.readIds : []));
+          setLikes(data?.likes || {});
+          setBmks(data?.bmks || {});
+        }).finally(() => { if (alive) setNewsCloudReady(true); });
+        return () => { alive = false; };
+      }, [nickname]);
+
+      useEffect(() => {
+        if (!newsCloudReady) return;
+        const id = setTimeout(() => {
+          cloudPut(["users", nickname || "guest", "newsState"], {
+            readIds: Array.from(readSet),
+            likes,
+            bmks,
+            updatedAt: cloudNow(),
+          });
+        }, 350);
+        return () => clearTimeout(id);
+      }, [newsCloudReady, nickname, readSet, likes, bmks]);
 
       const trending = useMemo(() => {
         const all = Object.values(cache).flat();
@@ -1999,6 +2064,14 @@ const WeeklyStatusFeature = ({ nickname, onHome }) => {
   const [blocked, setBlocked] = useState(false);
   const loadedRef = useRef(false);
   const src = WEEKLY_BATTLE_URL + "?nick=" + encodeURIComponent(nickname || "");
+
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === "EVERYMCU_GO_HOME") onHome();
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [onHome]);
 
   // 일정 시간 내 onLoad가 안 오면 차단된 것으로 간주
   useEffect(() => {
@@ -3487,13 +3560,21 @@ function CommunityFeature({ nickname, onHome }) {
 
   useEffect(() => {
     let alive = true;
+    setProfileCloudReady(false);
     cloudGet(["users", nickname || "guest", "communityProfile"], null).then(data => {
-      if (!alive || !data) return;
-      setUserPoints(data.userPoints ?? 350);
-      setOwnedItems(Array.isArray(data.ownedItems) ? data.ownedItems : []);
-      setEquippedItems(Array.isArray(data.equippedItems) ? data.equippedItems : []);
-      setBio(data.bio || "");
-      setMyReactions(data.myReactions || {});
+      if (!alive) return;
+      const profile = data || {
+        userPoints: lsGet(pointsKey, 350),
+        ownedItems: lsGet(itemsKey, []),
+        equippedItems: lsGet(`${itemsKey}_eq`, []),
+        bio: lsGet(bioKey, ""),
+        myReactions: lsGet(reactionsKey, {}),
+      };
+      setUserPoints(profile.userPoints ?? 350);
+      setOwnedItems(asList(profile.ownedItems));
+      setEquippedItems(asList(profile.equippedItems));
+      setBio(profile.bio || "");
+      setMyReactions(profile.myReactions || {});
     }).finally(() => { if (alive) setProfileCloudReady(true); });
     return () => { alive = false; };
   }, [nickname]);
