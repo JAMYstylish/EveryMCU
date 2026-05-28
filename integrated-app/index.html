@@ -26,6 +26,8 @@
   .lucide { display:inline-block; vertical-align:middle; }
   .animate-spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .expand-enter { max-height:0; opacity:0; overflow:hidden; transition:max-height .28s cubic-bezier(.22,1,.36,1), opacity .22s ease, margin .28s cubic-bezier(.22,1,.36,1); }
+  .expand-enter-active { max-height:220px; opacity:1; overflow:hidden; margin-top:12px; margin-bottom:12px; transition:max-height .32s cubic-bezier(.22,1,.36,1), opacity .24s ease, margin .32s cubic-bezier(.22,1,.36,1); }
   #loading { position:fixed; inset:0; background:linear-gradient(135deg,#1e1b4b 0%,#312e81 50%,#4c1d95 100%); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:24px; color:white; z-index:9999; transition:opacity .3s; }
   #loading.hide { opacity:0; pointer-events:none; }
   .spinner { width:60px; height:60px; border:5px solid rgba(255,255,255,.15); border-top-color:#a78bfa; border-radius:50%; animation:spin .9s linear infinite; }
@@ -53,6 +55,7 @@ window.__ICON_SVGS = {
   "ArrowLeft": "<path d=\"m12 19-7-7 7-7\"/><path d=\"M19 12H5\"/>",
   "Bell": "<path d=\"M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9\"/><path d=\"M10.3 21a1.94 1.94 0 0 0 3.4 0\"/>",
   "BellOff": "<path d=\"M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5\"/><path d=\"M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7\"/><path d=\"M10.3 21a1.94 1.94 0 0 0 3.4 0\"/><path d=\"m2 2 20 20\"/>",
+  "Bookmark": "<path d=\"m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z\"/>",
   "BookOpen": "<path d=\"M12 7v14\"/><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z\"/>",
   "Calendar": "<path d=\"M8 2v4\"/><path d=\"M16 2v4\"/><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M3 10h18\"/>",
   "Check": "<path d=\"M20 6 9 17l-5-5\"/>",
@@ -66,6 +69,7 @@ window.__ICON_SVGS = {
   "Flame": "<path d=\"M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z\"/>",
   "Globe": "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"/><path d=\"M2 12h20\"/>",
   "Hash": "<line x1=\"4\" x2=\"20\" y1=\"9\" y2=\"9\"/><line x1=\"4\" x2=\"20\" y1=\"15\" y2=\"15\"/><line x1=\"10\" x2=\"8\" y1=\"3\" y2=\"21\"/><line x1=\"16\" x2=\"14\" y1=\"3\" y2=\"21\"/>",
+  "Heart": "<path d=\"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z\"/>",
   "Home": "<path d=\"m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\"/><polyline points=\"9 22 9 12 15 12 15 22\"/>",
   "Info": "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 16v-4\"/><path d=\"M12 8h.01\"/>",
   "Lightbulb": "<path d=\"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5\"/><path d=\"M9 18h6\"/><path d=\"M10 22h4\"/>",
@@ -1340,254 +1344,629 @@ function LearningTrackerFeature({ nickname, onHome }) {
 // ============================================================
 // [4번] 최신기사 기능
 // ============================================================
-/* ══ 설정 및 데이터 소스 ══════════════════════════════════════════════ */
-const PROXIES = [
-  { name: "allorigins", build: u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-  { name: "codetabs",   build: u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-  { name: "corsproxy",  build: u => `https://corsproxy.io/?url=${encodeURIComponent(u)}` },
-];
+/* ══ 설정 ══════════════════════════════════════════════════════ */
+    const PROXIES = [
+      { name:"allorigins", build:u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+      { name:"codetabs",   build:u=>`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
+      { name:"corsproxy",  build:u=>`https://corsproxy.io/?url=${encodeURIComponent(u)}` },
+    ];
 
-const FEEDS = {
-  "코딩CS":    "https://news.google.com/rss/search?q=GPT+LLM+파이썬+코딩+개발&hl=ko&gl=KR&ceid=KR:ko",
-  "의료AI":    "https://news.google.com/rss/search?q=의료AI+의료인공지능+진단+병원&hl=ko&gl=KR&ceid=KR:ko",
-  "바이오테크": "https://news.google.com/rss/search?q=바이오테크+신약개발+유전자치료&hl=ko&gl=KR&ceid=KR:ko",
-  "채용":      "https://news.google.com/rss/search?q=IT+AI+개발자+엔지니어+채용+스타트업&hl=ko&gl=KR&ceid=KR:ko",
-  "헬스테크":  "https://news.google.com/rss/search?q=헬스케어+디지털헬스+웨어러블+스마트헬스&hl=ko&gl=KR&ceid=KR:ko",
-  "오픈소스":  "https://news.google.com/rss/search?q=오픈소스+GitHub+Llama+HuggingFace&hl=ko&gl=KR&ceid=KR:ko",
-};
+    const FEEDS = {
+      "코딩CS":    "https://news.google.com/rss/search?q=GPT+LLM+파이썬+코딩+개발&hl=ko&gl=KR&ceid=KR:ko",
+      "의료AI":    "https://news.google.com/rss/search?q=의료AI+의료인공지능+진단+병원&hl=ko&gl=KR&ceid=KR:ko",
+      "바이오테크": "https://news.google.com/rss/search?q=바이오테크+신약개발+유전자치료&hl=ko&gl=KR&ceid=KR:ko",
+      "채용":      "https://news.google.com/rss/search?q=IT+AI+개발자+엔지니어+채용+스타트업&hl=ko&gl=KR&ceid=KR:ko",
+      "헬스테크":  "https://news.google.com/rss/search?q=헬스케어+디지털헬스+웨어러블+스마트헬스&hl=ko&gl=KR&ceid=KR:ko",
+      "오픈소스":  "https://news.google.com/rss/search?q=오픈소스+GitHub+Llama+HuggingFace&hl=ko&gl=KR&ceid=KR:ko",
+    };
 
+    const MOCK = {
+      "코딩CS":    [
+        {id:"m1",cat:"코딩CS",    hot:true, src:"TechCrunch",   time:"12분 전", tags:["GPT-5","OpenAI","LLM"],              url:"https://techcrunch.com/category/artificial-intelligence/",title:"OpenAI, GPT-5 공식 출시 — 추론 능력 GPT-4o 대비 3배 향상",body:"오픈AI가 복잡한 멀티스텝 추론에서 GPT-4o 대비 3배 이상 향상된 성능을 보여주는 차세대 모델 GPT-5를 공식 발표했습니다. 이번 모델은 특히 코딩 및 수학적 추론 영역에서 압도적인 성취를 이루어냈습니다."},
+        {id:"m2",cat:"코딩CS",    hot:false,src:"Python.org",    time:"3시간 전",tags:["Python3.14","GIL","오픈소스"],        url:"https://docs.python.org/3/whatsnew/3.14.html",           title:"Python 3.14 베타 릴리즈 — GIL 제거 공식 지원 확정",body:"오랜 숙원이던 GIL(Global Interpreter Lock) 제거가 마침내 공식 지원됩니다. 이로써 멀티코어 환경에서 멀티스레딩 성능이 최대 4배까지 향상될 전망입니다."},
+      ],
+      "의료AI":    [
+        {id:"m3",cat:"의료AI",    hot:true, src:"청년의사",       time:"5시간 전",tags:["의료AI","폐암","진단"],               url:"https://docdocdoc.co.kr/news/articleList.html?sc_section_code=S1N1",title:"삼성서울병원, AI 기반 폐암 조기 진단 시스템 임상 도입 승인",body:"의료 영상 판독용 AI 시스템이 실제 임상에 본격 도입되었습니다. 임상 시험 결과 1기 폐암 발견율이 전문의 단독 판독 대비 23% 이상 향상된 것으로 나타났습니다."},
+        {id:"m4",cat:"의료AI",    hot:false,src:"MedPage Today", time:"8시간 전",tags:["FDA","망막","의료AI"],                url:"https://www.medpagetoday.com/special-reports/exclusives/",title:"FDA, AI 기반 당뇨망막병증 자동 진단 소프트웨어 3종 동시 승인",body:"안과 전문의 없이도 1차 의료기관에서 빠르고 정확하게 당뇨망막병증을 스크리닝할 수 있는 길이 열렸습니다. FDA는 정확도 90% 이상의 솔루션 3종을 승인했습니다."},
+      ],
+      "바이오테크": [
+        {id:"m5",cat:"바이오테크",hot:true, src:"Nature",        time:"1시간 전",tags:["AlphaFold","단백질구조","DeepMind"], url:"https://www.nature.com/subjects/structural-biology",     title:"DeepMind AlphaFold 3, 단백질-RNA 복합체 예측 정확도 92% 달성",body:"구글 딥마인드가 모든 생명체의 분자 구조를 정밀하게 예측하는 알파폴드 3를 공개했습니다. 단백질뿐만 아니라 DNA, RNA, 리간드 결합까지 예측 가능해져 신약 개발 속도가 혁신적으로 빨라질 전망입니다."},
+      ],
+      "채용":      [
+        {id:"m7",cat:"채용",      hot:false,src:"카카오헬스케어", time:"6시간 전",tags:["채용","카카오헬스케어","AI엔지니어"], url:"https://careers.kakao.com/jobs",                         title:"카카오헬스케어, AI 의료 데이터 엔지니어 신입·경력 대규모 채용",body:"의료 데이터 파이프라인 구축 및 AI 모델 서빙 경험자를 우대하며 파격적인 처우를 제시합니다. 대규모 의료 데이터 분석 플랫폼 고도화를 함께할 인재를 찾고 있습니다."},
+      ],
+      "헬스테크":  [
+        {id:"m9", cat:"헬스테크", hot:true, src:"9to5Mac",        time:"9시간 전",tags:["애플워치","혈당","웨어러블"],         url:"https://9to5mac.com/guides/apple-watch/",                title:"애플 워치 Series 11, 비침습 혈당 모니터링 기능 탑재 공식 발표",body:"적외선 센서 기술을 활용해 채혈 없이 지속적인 혈당 추적이 가능해집니다. 당뇨 환자 및 건강 관리에 관심 있는 사용자들의 웨어러블 시장 판도가 바뀔 것으로 예상됩니다."},
+      ],
+      "오픈소스":  [
+        {id:"m11",cat:"오픈소스", hot:false,src:"VentureBeat",     time:"11시간 전",tags:["Llama4","Meta","LLM"],             url:"https://venturebeat.com/category/ai/",                  title:"Meta, Llama 4 Scout 전 가중치 공개 — 로컬 실행 최적화 버전 제공",body:"일반 소비자용 단일 GPU 환경에서도 원활하게 구동할 수 있도록 경량화된 오픈소스 거대 언어 모델이 공개되었습니다. 상업적 이용도 가능합니다."},
+      ],
+    };
 
-const NEWS_TABS = ["전체", "AI추천", "코딩CS", "의료AI", "바이오테크", "채용", "헬스테크", "오픈소스"];
-const BADGE = {
-  "코딩CS": "bg-blue-100 text-blue-700", "의료AI": "bg-purple-100 text-purple-700",
-  "바이오테크": "bg-emerald-100 text-emerald-700", "채용": "bg-orange-100 text-orange-700",
-  "헬스테크": "bg-pink-100 text-pink-700", "오픈소스": "bg-yellow-100 text-yellow-700"
-};
+    const KW_MAP = [
+      ["GPT-5",["gpt-5","gpt5"]],["ChatGPT",["chatgpt"]],["OpenAI",["openai"]],
+      ["Claude",["claude","anthropic"]],["Gemini",["gemini"]],["LLM",["llm","거대언어모델"]],
+      ["DeepMind",["deepmind"]],["AlphaFold",["alphafold"]],["Python",["python","파이썬"]],
+      ["의료AI",["의료ai","의료인공지능"]],["FDA",["fda","식약처"]],["CRISPR",["crispr","크리스퍼"]],
+      ["신약개발",["신약개발"]],["웨어러블",["웨어러블","애플워치","갤럭시링"]],
+      ["Llama",["llama"]],["채용공고",["채용","구인","모집"]],
+      ["오픈소스",["오픈소스","opensource"]],["GitHub",["github","깃허브"]],
+      ["HuggingFace",["huggingface","허깅페이스"]],["Meta",["meta ai","메타ai"]],
+    ];
 
-const KW_MAP = [
-  ["GPT-5",["gpt-5","gpt5"]],["ChatGPT",["chatgpt"]],["OpenAI",["openai"]],
-  ["Claude",["claude","anthropic"]],["Gemini",["gemini"]],["LLM",["llm","거대언어모델"]],
-  ["DeepMind",["deepmind"]],["AlphaFold",["alphafold"]],["Python",["python","파이썬"]],
-  ["의료AI",["의료ai","의료인공지능"]],["FDA",["fda","식약처"]],["CRISPR",["crispr","크리스퍼"]],
-  ["신약개발",["신약개발"]],["웨어러블",["웨어러블","애플워치","갤럭시링"]],
-  ["Llama",["llama"]],["채용공고",["채용","구인","모집"]],
-  ["오픈소스",["오픈소스","opensource"]],["GitHub",["github","깃허브"]],
-  ["HuggingFace",["huggingface","허깅페이스"]],["Meta",["meta ai","메타ai"]],
-];
+    const NEWS_TABS = ["전체", "AI추천", "코딩CS", "의료AI", "바이오테크", "채용", "헬스테크", "오픈소스"];
+    const BADGE = {
+      "코딩CS":    "bg-blue-100 text-blue-700",
+      "의료AI":    "bg-purple-100 text-purple-700",
+      "바이오테크":"bg-emerald-100 text-emerald-700",
+      "채용":      "bg-orange-100 text-orange-700",
+      "헬스테크":  "bg-pink-100 text-pink-700",
+      "오픈소스":  "bg-yellow-100 text-yellow-700",
+    };
 
-/* ══ 유틸리티 함수 ══════════════════════════════════════════════ */
-function extractTags(text) {
-  const lower = text.toLowerCase();
-  const found = KW_MAP.filter(([,keys]) => keys.some(k => lower.includes(k))).map(([t]) => t).slice(0, 3);
-  return found.length > 0 ? found : [text.split(/\s+/)[0].replace(/[^가-힣a-zA-Z0-9]/g, "").slice(0, 10) || "뉴스"];
-}
-
-// ── 폴백 샘플 뉴스 (모든 프록시 실패 시 표시, 빈 화면 방지) ──
-// ── 폴백 mock 뉴스 (모든 프록시 실패 시, 빈 화면 방지) ──
-const FALLBACK_NEWS = {
-  "코딩CS":    [
-    {id:"m1",cat:"코딩CS",    hot:true, src:"TechCrunch",   time:"12분 전", tags:["GPT-5","OpenAI","LLM"],              url:"https://techcrunch.com/category/artificial-intelligence/",title:"OpenAI, GPT-5 공식 출시 — 추론 능력 GPT-4o 대비 3배 향상",body:"오픈AI가 복잡한 멀티스텝 추론에서 GPT-4o 대비 3배 이상 향상된 성능을 보여주는 차세대 모델 GPT-5를 공식 발표했습니다. 이번 모델은 특히 코딩 및 수학적 추론 영역에서 압도적인 성취를 이루어냈습니다."},
-    {id:"m2",cat:"코딩CS",    hot:false,src:"Python.org",    time:"3시간 전",tags:["Python3.14","GIL","오픈소스"],        url:"https://docs.python.org/3/whatsnew/3.14.html",           title:"Python 3.14 베타 릴리즈 — GIL 제거 공식 지원 확정",body:"오랜 숙원이던 GIL(Global Interpreter Lock) 제거가 마침내 공식 지원됩니다. 이로써 멀티코어 환경에서 멀티스레딩 성능이 최대 4배까지 향상될 전망입니다."},
-  ],
-  "의료AI":    [
-    {id:"m3",cat:"의료AI",    hot:true, src:"청년의사",       time:"5시간 전",tags:["의료AI","폐암","진단"],               url:"https://docdocdoc.co.kr/news/articleList.html?sc_section_code=S1N1",title:"삼성서울병원, AI 기반 폐암 조기 진단 시스템 임상 도입 승인",body:"의료 영상 판독용 AI 시스템이 실제 임상에 본격 도입되었습니다. 임상 시험 결과 1기 폐암 발견율이 전문의 단독 판독 대비 23% 이상 향상된 것으로 나타났습니다."},
-    {id:"m4",cat:"의료AI",    hot:false,src:"MedPage Today", time:"8시간 전",tags:["FDA","망막","의료AI"],                url:"https://www.medpagetoday.com/special-reports/exclusives/",title:"FDA, AI 기반 당뇨망막병증 자동 진단 소프트웨어 3종 동시 승인",body:"안과 전문의 없이도 1차 의료기관에서 빠르고 정확하게 당뇨망막병증을 스크리닝할 수 있는 길이 열렸습니다. FDA는 정확도 90% 이상의 솔루션 3종을 승인했습니다."},
-  ],
-  "바이오테크": [
-    {id:"m5",cat:"바이오테크",hot:true, src:"Nature",        time:"1시간 전",tags:["AlphaFold","단백질구조","DeepMind"], url:"https://www.nature.com/subjects/structural-biology",     title:"DeepMind AlphaFold 3, 단백질-RNA 복합체 예측 정확도 92% 달성",body:"구글 딥마인드가 모든 생명체의 분자 구조를 정밀하게 예측하는 알파폴드 3를 공개했습니다. 단백질뿐만 아니라 DNA, RNA, 리간드 결합까지 예측 가능해져 신약 개발 속도가 혁신적으로 빨라질 전망입니다."},
-  ],
-  "채용":      [
-    {id:"m7",cat:"채용",      hot:false,src:"카카오헬스케어", time:"6시간 전",tags:["채용","카카오헬스케어","AI엔지니어"], url:"https://careers.kakao.com/jobs",                         title:"카카오헬스케어, AI 의료 데이터 엔지니어 신입·경력 대규모 채용",body:"의료 데이터 파이프라인 구축 및 AI 모델 서빙 경험자를 우대하며 파격적인 처우를 제시합니다. 대규모 의료 데이터 분석 플랫폼 고도화를 함께할 인재를 찾고 있습니다."},
-  ],
-  "헬스테크":  [
-    {id:"m9", cat:"헬스테크", hot:true, src:"9to5Mac",        time:"9시간 전",tags:["애플워치","혈당","웨어러블"],         url:"https://9to5mac.com/guides/apple-watch/",                title:"애플 워치 Series 11, 비침습 혈당 모니터링 기능 탑재 공식 발표",body:"적외선 센서 기술을 활용해 채혈 없이 지속적인 혈당 추적이 가능해집니다. 당뇨 환자 및 건강 관리에 관심 있는 사용자들의 웨어러블 시장 판도가 바뀔 것으로 예상됩니다."},
-  ],
-  "오픈소스":  [
-    {id:"m11",cat:"오픈소스", hot:false,src:"VentureBeat",     time:"11시간 전",tags:["Llama4","Meta","LLM"],             url:"https://venturebeat.com/category/ai/",                  title:"Meta, Llama 4 Scout 전 가중치 공개 — 로컬 실행 최적화 버전 제공",body:"일반 소비자용 단일 GPU 환경에서도 원활하게 구동할 수 있도록 경량화된 오픈소스 거대 언어 모델이 공개되었습니다. 상업적 이용도 가능합니다."},
-  ],
-};
-
-function timeAgo(dateStr) {
-  if (!dateStr) return "최근";
-  const d = new Date(dateStr);
-  if (isNaN(d)) return "최근";
-  const s = (Date.now() - d.getTime()) / 1000;
-  if (s < 60) return "방금 전";
-  if (s < 3600) return `${Math.floor(s / 60)}분 전`;
-  if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
-  return d.toLocaleDateString("ko-KR");
-}
-
-function extractRealUrl(el) {
-  const linkEl = el.getElementsByTagName("link")[0];
-  if (linkEl && linkEl.textContent && linkEl.textContent.startsWith("http")) {
-    return linkEl.textContent.trim();
-  }
-  const guid = el.getElementsByTagName("guid")[0]?.textContent?.trim();
-  if (guid && guid.startsWith("http")) return guid;
-  return "#";
-}
-
-function parseRSS(xmlStr, cat) {
-  const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
-  const items = Array.from(doc.getElementsByTagName("item"));
-  const validNews = [];
-  let i = 0;
-  for (const el of items) {
-    const raw = el.getElementsByTagName("title")[0]?.textContent?.trim() || "";
-    if (!raw) continue;
-    const url = extractRealUrl(el);
-    let isValid = url !== "#";
-    if (isValid) {
-      try {
-        const parsed = new URL(url);
-        if (parsed.pathname.length <= 1 && !parsed.search) isValid = false;
-      } catch(e) { isValid = false; }
+    /* ══ 유틸 ══════════════════════════════════════════════════════ */
+    function extractTags(text) {
+      const lower = text.toLowerCase();
+      const found = KW_MAP.filter(([,keys]) => keys.some(k => lower.includes(k))).map(([t]) => t).slice(0, 3);
+      return found.length > 0 ? found : [text.split(/\s+/)[0].replace(/[^가-힣a-zA-Z0-9]/g, "").slice(0, 10) || "뉴스"];
     }
-    if (isValid) {
-      const srcEl = el.getElementsByTagName("source")[0];
-      const src = srcEl?.textContent?.trim() || (raw.includes(" - ") ? raw.split(" - ").pop().trim() : "뉴스");
-      const title = raw.includes(" - ") ? raw.split(" - ").slice(0, -1).join(" - ").trim() : raw;
-      const pub = el.getElementsByTagName("pubDate")[0]?.textContent;
-      const rawDesc = (el.getElementsByTagName("description")[0]?.textContent || "")
-        .replace(/&lt;[^&]*&gt;/g, "").replace(/<[^>]*>/g, "")
-        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").trim();
-      validNews.push({
-        id: `${cat}${i}${Date.now()}`, cat, hot: i < 2,
-        src: src.slice(0, 24), time: timeAgo(pub),
-        timestamp: pub ? new Date(pub).getTime() : Date.now() - i * 60000,
-        tags: extractTags(title), title: title || "뉴스",
-        body: rawDesc || "본문 요약이 제공되지 않았습니다.", url: url,
-      });
-      i++;
-    }
-    if (validNews.length >= 40) break;
-  }
-  return validNews;
-}
 
-async function fetchNews(cat) {
-  const rssUrl = FEEDS[cat];
-  const shuffledProxies = [...PROXIES].sort(() => Math.random() - 0.5);
-  for (const proxy of shuffledProxies) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(proxy.build(rssUrl), { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const text = await res.text();
-        if (text && text.length > 100 && text.includes("<rss")) {
-          const items = parseRSS(text, cat);
-          if (items.length > 0) return items;
+    function timeAgo(dateStr) {
+      if (!dateStr) return "최근";
+      const d = new Date(dateStr);
+      if (isNaN(d)) return "최근";
+      const s = (Date.now() - d.getTime()) / 1000;
+      if (s < 60)     return "방금 전";
+      if (s < 3600)   return `${Math.floor(s / 60)}분 전`;
+      if (s < 86400)  return `${Math.floor(s / 3600)}시간 전`;
+      if (s < 604800) return `${Math.floor(s / 86400)}일 전`;
+      return d.toLocaleDateString("ko-KR");
+    }
+
+    function extractRealUrl(el) {
+      const linkEl = el.getElementsByTagName("link")[0];
+      if (linkEl && linkEl.textContent && linkEl.textContent.startsWith("http")) {
+        return linkEl.textContent.trim();
+      }
+      const guid = el.getElementsByTagName("guid")[0]?.textContent?.trim();
+      if (guid && guid.startsWith("http")) return guid;
+      return "#";
+    }
+
+    function parseRSS(xmlStr, cat) {
+      const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
+      const items = Array.from(doc.getElementsByTagName("item"));
+      
+      const validNews = [];
+      let i = 0;
+      
+      for (const el of items) {
+        const raw = el.getElementsByTagName("title")[0]?.textContent?.trim() || "";
+        if (!raw) continue; 
+        
+        const url = extractRealUrl(el);
+        let isValid = url !== "#";
+        
+        if (isValid) {
+          try {
+            const parsed = new URL(url);
+            if (parsed.pathname.length <= 1 && !parsed.search) {
+              isValid = false;
+            }
+          } catch(e) {
+            isValid = false;
+          }
+        }
+        
+        if (isValid) {
+          const srcEl = el.getElementsByTagName("source")[0];
+          const src = srcEl?.textContent?.trim() || (raw.includes(" - ") ? raw.split(" - ").pop().trim() : "뉴스");
+          const title = raw.includes(" - ") ? raw.split(" - ").slice(0, -1).join(" - ").trim() : raw;
+          const pub = el.getElementsByTagName("pubDate")[0]?.textContent;
+          const rawDesc = (el.getElementsByTagName("description")[0]?.textContent || "")
+            .replace(/&lt;[^&]*&gt;/g, "").replace(/<[^>]*>/g, "")
+            .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
+            .trim();
+            
+          validNews.push({
+            id: `${cat}${i}${Date.now()}`, cat, hot: i < 2,
+            src: src.slice(0, 24), time: timeAgo(pub),
+            timestamp: pub ? new Date(pub).getTime() : Date.now() - i * 60000, 
+            tags: extractTags(title), title: title || "뉴스",
+            body: rawDesc || "본문 요약이 제공되지 않았습니다.", 
+            url: url,
+          });
+          i++;
+        }
+        
+        if (validNews.length >= 40) break;
+      }
+      
+      return validNews;
+    }
+
+    async function fetchWithFallback(cat) {
+      const rssUrl = FEEDS[cat];
+      const shuffledProxies = [...PROXIES].sort(() => Math.random() - 0.5);
+
+      for (const proxy of shuffledProxies) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500); 
+          
+          const res = await fetch(proxy.build(rssUrl), { signal: controller.signal });
+          clearTimeout(timeoutId);
+          
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text.length > 100 && text.includes("<rss")) {
+              const items = parseRSS(text, cat);
+              if (items.length > 0) return { items, source: "live", proxy: proxy.name };
+            }
+          }
+        } catch (e) {
         }
       }
-    } catch (e) {}
-  }
-  // 모든 프록시 실패 시 mock 데이터 (빈 화면 방지)
-  return (FALLBACK_NEWS[cat] || []).map((m, i) => ({ ...m, timestamp: Date.now() - i * 3600000 }));
-}
 
-/* ══ 서브 컴포넌트 ══════════════════════════════════════════════ */
-function NewsCard({ news, isRead, isRec, onRead, onTag }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div onClick={() => {onRead(news.id); setExpanded(!expanded);}} 
-         className={`p-4 border rounded-2xl cursor-pointer transition ${isRead ? "bg-gray-100" : "bg-white shadow-sm"}`}>
-      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${BADGE[news.cat] || "bg-gray-200"}`}>{news.cat}</span>
-      <p className="font-semibold text-[14px] mt-2">{news.title}</p>
-      
-      <div className={expanded ? "max-h-[300px] opacity-100 mt-3 transition-all" : "max-h-0 opacity-0 overflow-hidden transition-all"}>
-        <p className="text-[12px] text-gray-600 bg-gray-50 p-2 rounded-lg">{news.body}</p>
-        <button onClick={(e) => { e.stopPropagation(); window.open(news.url, "_blank"); }} className="mt-2 text-indigo-600 text-[11px] font-bold flex items-center">
-          기사 원문 보기 <ExternalLink size={10} className="ml-1" />
-        </button>
-      </div>
-    </div>
-  );
-}
+      console.warn(`[NewsFeature] ${cat} 모든 프록시 응답 실패. Mock 데이터를 제공합니다.`);
+      const mockItems = (MOCK[cat] || []).map((m, i) => ({ ...m, timestamp: Date.now() - i * 3600000 }));
+      return { items: mockItems, source: "mock", proxy: "none" };
+    }
 
-/* ══ 메인 컴포넌트 ══════════════════════════════════════════════ */
-function NewsFeature({ nickname, onHome }) {
-  const [data, setData] = useState({});
-  const [read, setRead] = useState(new Set());
-  const [tab, setTab] = useState("전체");
-  const fetchingRef = useRef(new Set());
+    /* ══ 스켈레톤 ══════════════════════════════════════════════════ */
+    function SkeletonCard() {
+      return (
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 animate-pulse">
+          <div className="flex gap-2 mb-3">
+            <div className="h-4 w-16 bg-gray-200 rounded-full" />
+            <div className="h-4 w-8  bg-gray-200 rounded-full" />
+          </div>
+          <div className="space-y-2 mb-4">
+            <div className="h-3.5 w-full bg-gray-200 rounded" />
+            <div className="h-3.5 w-5/6  bg-gray-200 rounded" />
+            <div className="h-3.5 w-4/6  bg-gray-200 rounded" />
+          </div>
+          <div className="flex gap-1.5 mb-4">
+            {[1,2,3].map(k => <div key={k} className="h-4 w-14 bg-gray-100 rounded-full" />)}
+          </div>
+        </div>
+      );
+    }
 
-  const [loading, setLoading] = useState(true);
+    /* ══════════════════════════════════════════════════════════════
+       🃏  뉴스 카드
+       ══════════════════════════════════════════════════════════════ */
+    function NewsCard({ news, isRead, isRec, onRead, onTag, liked, bookmarked, onLike, onBookmark }) {
+      const [expanded, setExpanded] = useState(false);
+      const hasLink = news.url && news.url !== "#";
 
-  useEffect(() => {
-    let alive = true;
-    const loadAll = async () => {
-      const cats = Object.keys(FEEDS);
-      // 모든 카테고리를 병렬로 로딩 (빠름)
-      await Promise.all(cats.map(async (cat) => {
+      const handleCardClick = () => {
+        if (!isRead) onRead(news.id);
+        setExpanded(!expanded);
+      };
+
+      const handleLinkClick = (e) => {
+        e.stopPropagation();
+        if (!isRead) onRead(news.id);
+        if (hasLink) window.open(news.url, "_blank", "noopener,noreferrer");
+      };
+
+      return (
+        <div
+          onClick={handleCardClick}
+          className={`rounded-2xl p-4 border transition-all cursor-pointer relative ${
+            isRead
+              ? "bg-gray-100 border-gray-200 shadow-none"
+              : "bg-white border-gray-100 shadow-sm hover:shadow-md"
+          }`}
+        >
+          {isRead && (
+            <div className="absolute top-3 right-3 flex items-center gap-1 text-[10px] text-gray-400">
+              <Check size={10} /> 읽음
+            </div>
+          )}
+
+          {isRec && (
+            <div className="flex items-center gap-2 mb-2">
+              <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full text-white"
+                style={{ background: "linear-gradient(90deg,#6366f1,#8b5cf6)" }}>
+                <Sparkles size={9} /> AI 추천
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between mb-2" style={{ paddingRight: isRead ? 44 : 0 }}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${BADGE[news.cat] ?? "bg-gray-100 text-gray-600"}`}>
+                {news.cat}
+              </span>
+              {news.hot && (
+                <span className="flex items-center gap-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-500">
+                  <Flame size={9} /> HOT
+                </span>
+              )}
+            </div>
+          </div>
+
+          <p className={`text-[13.5px] font-semibold leading-snug ${isRead ? "text-gray-400" : "text-gray-900"} ${expanded ? 'mb-2' : 'mb-3'}`}>
+            {news.title}
+          </p>
+
+          <div className={expanded ? "expand-enter-active" : "expand-enter"}>
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl">
+              <p className="text-[12px] text-gray-600 leading-relaxed break-keep">
+                {news.body}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1 mb-3">
+            {news.tags.map(tag => (
+              <button key={tag}
+                onClick={e => { e.stopPropagation(); onTag(tag); }}
+                className="text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full hover:bg-indigo-100 transition-colors"
+                style={{ border: "none", cursor: "pointer" }}>
+                #{tag}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+              <span className={`font-medium ${isRead ? "text-gray-400" : "text-gray-500"}`}>{news.src}</span>
+              <span>·</span>
+              <span>{news.time}</span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              {hasLink && (
+                <button
+                  onClick={handleLinkClick}
+                  className="flex items-center gap-1 text-[11px] font-bold text-white bg-indigo-500 px-2.5 py-1.5 rounded-lg hover:bg-indigo-600 transition-colors mr-1 shadow-sm"
+                  style={{ border: "none", cursor: "pointer" }}
+                >
+                  기사 원문 <ExternalLink size={11} />
+                </button>
+              )}
+              
+              <button
+                onClick={e => { e.stopPropagation(); onLike(news.id); }}
+                className="p-1"
+                style={{ background:"none", border:"none", cursor:"pointer", display:"flex" }}>
+                <Heart size={15} fill={liked ? "#ef4444" : "none"} color={liked ? "#ef4444" : "#d1d5db"} />
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); onBookmark(news.id); }}
+                className="p-1"
+                style={{ background:"none", border:"none", cursor:"pointer", display:"flex" }}>
+                <Bookmark size={15} fill={bookmarked ? "#6366f1" : "none"} color={bookmarked ? "#6366f1" : "#d1d5db"} />
+              </button>
+              
+              <div className="ml-1 text-gray-300">
+                {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ══ 메인 컴포넌트 ══════════════════════════════════════════════ */
+    function NewsFeature({ nickname, onHome }) {
+      const [tab,       setTab]       = useState("전체"); 
+      const [cache,     setCache]     = useState({});
+      const [meta,      setMeta]      = useState({});
+      const [loading,   setLoading]   = useState({});
+      const [readSet,   setReadSet]   = useState(new Set());
+      const [likes,     setLikes]     = useState({});
+      const [bmks,      setBmks]      = useState({});
+      const [kwFilter,  setKwFilter]  = useState(null);
+      const [trendOpen, setTrendOpen] = useState(true);
+      const fetchingRef = useRef(new Set());
+
+      const doFetch = useCallback(async (cat) => {
         if (fetchingRef.current.has(cat)) return;
         fetchingRef.current.add(cat);
-        const items = await fetchNews(cat);
-        if (alive) setData(prev => ({ ...prev, [cat]: items }));
-      }));
-      if (alive) setLoading(false);
-    };
-    loadAll();
-    return () => { alive = false; };
-  }, []);
+        setLoading(p => ({ ...p, [cat]: true }));
+        const { items, source, proxy } = await fetchWithFallback(cat);
+        setCache(p => ({ ...p, [cat]: items }));
+        setMeta(p  => ({ ...p, [cat]: { source, proxy } }));
+        fetchingRef.current.delete(cat);
+        setLoading(p => ({ ...p, [cat]: false }));
+      }, []);
 
-  const displayList = useMemo(() => {
-    let list = tab === "AI추천" ? Object.values(data).flat().filter(n => !read.has(n.id)) : 
-               (tab === "전체" ? Object.values(data).flat() : data[tab] || []);
-    return [...new Map(list.map(item => [item.id, item])).values()].sort((a,b) => b.timestamp - a.timestamp);
-  }, [data, tab, read]);
+      const refreshCat = useCallback((cat) => {
+        setCache(p => { const n = { ...p }; delete n[cat]; return n; });
+        setMeta(p  => { const n = { ...p }; delete n[cat]; return n; });
+        fetchingRef.current.delete(cat);
+        doFetch(cat);
+      }, [doFetch]);
 
-  return (
-    <div className="max-w-[390px] mx-auto min-h-screen bg-gray-50 pb-10">
-      <div className="sticky top-0 bg-white p-4 border-b z-20 shadow-sm">
-        <div className="flex justify-between items-center mb-3">
-          <h1 className="font-bold text-lg">AI·의료 뉴스피드</h1>
-          <button onClick={onHome} className="text-gray-500 hover:text-indigo-600"><Home size={20}/></button>
-        </div>
-        <div className="flex gap-2 overflow-x-auto no-scrollbar">
-          {NEWS_TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)} 
-              className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${tab === t ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700"}`}>
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
+      useEffect(() => {
+        const fetchAll = async () => {
+          const categories = Object.keys(FEEDS);
+          for (const cat of categories) {
+            doFetch(cat);
+            await new Promise(r => setTimeout(r, 1500)); 
+          }
+        };
+        fetchAll();
+      }, [doFetch]);
 
-      <div className="p-4 space-y-3">
-        {loading && displayList.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <Loader2 size={32} className="animate-spin text-indigo-500" />
-            <span className="text-gray-400 text-sm">뉴스를 불러오는 중...</span>
+      useEffect(() => { 
+        if (tab !== "AI추천" && tab !== "전체" && !cache[tab]) doFetch(tab); 
+      }, [tab, cache, doFetch]); 
+
+      const trending = useMemo(() => {
+        const all = Object.values(cache).flat();
+        if (!all.length) return [];
+        const freq = {};
+        all.forEach(n => n.tags.forEach(t => { freq[t] = (freq[t] || 0) + 1; }));
+        return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([kw], i) => ({ rank: i + 1, kw }));
+      }, [cache]);
+
+      const recs = useMemo(() => {
+        if (!readSet.size) return [];
+        const all  = Object.values(cache).flat();
+        const freq = {};
+        all.filter(n => readSet.has(n.id)).forEach(n => n.tags.forEach(t => { freq[t] = (freq[t] || 0) + 1; }));
+        return all.filter(n => !readSet.has(n.id))
+          .map(n => ({ ...n, score: n.tags.reduce((s, t) => s + (freq[t] || 0), 0) }))
+          .filter(n => n.score > 0).sort((a, b) => b.score - a.score).slice(0, 15);
+      }, [readSet, cache]);
+
+      const interest = useMemo(() => {
+        if (!readSet.size) return [];
+        const freq = {};
+        Object.values(cache).flat().filter(n => readSet.has(n.id))
+          .forEach(n => n.tags.forEach(t => { freq[t] = (freq[t] || 0) + 1; }));
+        return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 6);
+      }, [readSet, cache]);
+
+      const norm   = s => s.toLowerCase().replace(/\s/g, "");
+      const kwList = useMemo(() => {
+        if (!kwFilter) return [];
+        const kw = norm(kwFilter);
+        return Object.values(cache).flat()
+          .filter(n => n.tags.some(t => norm(t).includes(kw) || kw.includes(norm(t))));
+      }, [kwFilter, cache]);
+
+      // ✨ 수정됨: 모든 일반 카테고리와 검색 결과에 대해 최신순(timestamp) 정렬 적용
+      const displayList = useMemo(() => {
+        if (kwFilter) {
+          return [...kwList].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        }
+        if (tab === "AI추천") {
+          return recs; // AI추천은 맞춤형 점수순으로 노출
+        }
+        if (tab === "전체") {
+          const allNews = Object.values(cache).flat();
+          const uniqueNews = Array.from(new Map(allNews.map(item => [item.id, item])).values());
+          return uniqueNews.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        }
+        // 나머지 개별 카테고리 탭도 최신순으로 정렬
+        const catNews = cache[tab] || [];
+        return [...catNews].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      }, [kwFilter, kwList, tab, recs, cache]);
+
+      const isAITab     = tab === "AI추천" && !kwFilter;
+      const isAllTab    = tab === "전체" && !kwFilter;
+      
+      const isLoadingAll = (isAllTab || isAITab) && Object.values(cache).flat().length === 0;
+      const isLoadingCat = !kwFilter && !isAITab && !isAllTab && loading[tab];
+      const isLoading   = isLoadingAll || isLoadingCat;
+      
+      const isMock      = !kwFilter && !isAITab && !isAllTab && meta[tab]?.source === "mock";
+
+      const markRead   = id => setReadSet(p => new Set([...p, id]));
+      const resetRead  = ()  => setReadSet(new Set());
+      const toggleLike = id  => setLikes(p => ({ ...p, [id]: !p[id] }));
+      const toggleBmk  = id  => setBmks(p  => ({ ...p, [id]: !p[id] }));
+
+      return (
+        <div className="flex flex-col min-h-screen w-full max-w-[390px] mx-auto font-sans shadow-xl bg-gray-50 pb-10 relative">
+          
+          <div className="bg-white px-4 pt-5 pb-3 border-b border-gray-100 sticky top-0 z-20">
+            <div className="flex items-center justify-between">
+              {kwFilter ? (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setKwFilter(null)}
+                    className="p-1 rounded-full hover:bg-indigo-50 transition-colors"
+                    style={{ background:"none", border:"none", cursor:"pointer" }}>
+                    <ArrowLeft size={18} color="#6366f1" />
+                  </button>
+                  <div>
+                    <p className="text-[11px] text-gray-400 mb-0.5">키워드 검색</p>
+                    <h1 className="flex items-center gap-1 text-[17px] font-bold text-gray-900">
+                      <Hash size={13} color="#6366f1" /> {kwFilter}
+                    </h1>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-[11px] text-gray-400 mb-0.5">{nickname}님을 위한</p>
+                  <h1 className="text-[17px] font-bold text-gray-900 tracking-tight">AI·의료 뉴스피드</h1>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                {!kwFilter && tab !== "AI추천" && tab !== "전체" && (
+                  <button onClick={() => refreshCat(tab)}
+                    className="p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition-all"
+                    style={{ border:"none", cursor:"pointer", display:"flex" }}>
+                    <RefreshCw size={15} className={isLoading ? "animate-spin" : ""} />
+                  </button>
+                )}
+                <button onClick={onHome}
+                  className="p-2 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all"
+                  style={{ border:"none", cursor:"pointer", display:"flex" }}>
+                  <Home size={15} />
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 mt-1">
+              <div className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                style={{ background: isLoading ? "#fbbf24" : isMock ? "#f87171" : "#34d399" }} />
+              <p className="text-[10px] text-gray-400">
+                {kwFilter ? `관련 뉴스 ${kwList.length}건`
+                  : isLoading ? "최신 뉴스 불러오는 중..."
+                  : isMock   ? "네트워크 불안정 — 샘플 데이터 표시 중"
+                  : "Google News 실시간 연동"}
+              </p>
+            </div>
           </div>
-        ) : displayList.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center px-6">
-            <Newspaper size={36} className="text-gray-300" />
-            <p className="text-gray-400 text-sm leading-relaxed">
-              이 카테고리의 뉴스를 불러오지 못했어요.<br/>
-              다른 탭을 눌러보거나 잠시 후 다시 시도해주세요.
-            </p>
-          </div>
-        ) : (
-          <>
-            {displayList.some(n => n.fallback) && (
-              <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-amber-700 text-xs">
-                <AlertCircle size={13} className="shrink-0" />
-                실시간 연결이 불안정해 샘플 기사를 표시하고 있어요.
+
+          {isMock && !kwFilter && (
+            <div className="mx-4 mt-3 bg-yellow-50 border border-yellow-200 rounded-2xl p-3 flex items-start gap-2">
+              <Info size={14} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[11px] font-semibold text-yellow-800 mb-0.5">실제 뉴스를 가져오지 못했어요</p>
+                <p className="text-[10px] text-yellow-700 leading-relaxed">
+                  프록시 서버가 일시적으로 불안정합니다. 새로고침 버튼으로 재시도할 수 있어요.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!kwFilter && (
+            <div className="mx-4 mt-3">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <button onClick={() => setTrendOpen(v => !v)}
+                  className="w-full flex items-center gap-2 px-4 py-3"
+                  style={{ background:"none", border:"none", cursor:"pointer" }}>
+                  <Flame size={14} className="text-orange-500" />
+                  <span className="text-[13px] font-bold text-gray-800 flex-1 text-left">실시간 트렌딩 키워드</span>
+                  <span className="text-[10px] bg-orange-50 text-orange-500 font-semibold px-2 py-0.5 rounded-full">TOP 5</span>
+                  <span className="text-gray-400 text-xs ml-1">{trendOpen ? "▲" : "▼"}</span>
+                </button>
+                {trendOpen && (
+                  <div className="px-4 pb-3 border-t border-gray-50">
+                    {trending.length === 0
+                      ? <p className="text-[11px] text-gray-400 py-3 text-center animate-pulse">키워드 분석 중...</p>
+                      : trending.map(t => (
+                        <div key={t.rank} className="flex items-center gap-3 pt-2.5">
+                          <span className={`text-xs font-extrabold w-4 shrink-0 ${t.rank <= 3 ? "text-indigo-600" : "text-gray-400"}`}>
+                            {t.rank}
+                          </span>
+                          <button onClick={() => setKwFilter(t.kw)}
+                            className="text-[13px] font-semibold text-gray-800 flex-1 text-left"
+                            style={{ background:"none", border:"none", cursor:"pointer", textDecoration:"underline", textDecorationColor:"#c7d2fe" }}>
+                            {t.kw}
+                          </button>
+                          <TrendingUp size={11} className="text-red-400" />
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!kwFilter && (
+            <div className="px-4 py-3 sticky top-[72px] z-10 bg-gray-50/95 backdrop-blur-sm border-b border-gray-100/50">
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                {NEWS_TABS.map(t => {
+                  const active = tab === t;
+                  const isAI   = t === "AI추천";
+                  const isAll  = t === "전체";
+                  const isSub  = t === "헬스테크" || t === "오픈소스";
+                  
+                  return (
+                    <button key={t} onClick={() => setTab(t)}
+                      className={`shrink-0 flex items-center gap-1 px-3.5 py-1.5 rounded-full text-[12px] font-semibold transition-all active:scale-95 ${
+                        active
+                          ? (isAI || isAll) ? "text-white shadow-md shadow-purple-200" : "bg-indigo-600 text-white shadow-md shadow-indigo-200"
+                          : (isAI || isAll) ? "bg-purple-50 text-purple-600 border border-purple-200" : "bg-white text-gray-500 border border-gray-200"
+                      }`}
+                      style={{ border:"none", cursor:"pointer",
+                        ...(active && (isAI || isAll) ? { background:"linear-gradient(90deg,#4f46e5,#7c3aed)" } : {}) }}>
+                      {isAI && <Sparkles size={10} />}
+                      {isAll && <Globe size={10} />}
+                      {t}
+                      {isAI && recs.length > 0 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                          style={{ background: active ? "rgba(255,255,255,0.3)" : "#6366f1", color:"white" }}>
+                          {recs.length}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex-1 px-4 mt-2 space-y-3">
+            {isLoading && [1,2,3].map(k => <SkeletonCard key={k} />)}
+
+            {isAITab && !readSet.size && (
+              <div className="flex flex-col items-center mt-16 gap-3 text-center">
+                <Sparkles size={40} color="#c7d2fe" />
+                <p className="text-[14px] font-semibold text-gray-600">아직 읽은 뉴스가 없어요</p>
+                <p className="text-[12px] text-gray-400 leading-relaxed">
+                  관심 있는 뉴스 카드를 클릭해 읽어보세요.<br />조회 기록을 바탕으로 맞춤 추천을 드려요.
+                </p>
+                <button onClick={() => setTab("전체")}
+                  className="px-5 py-2 mt-2 bg-indigo-600 text-white rounded-full text-[13px] font-semibold hover:bg-indigo-700 transition-colors"
+                  style={{ border:"none", cursor:"pointer", boxShadow:"0 4px 12px rgba(79,70,229,.3)" }}>
+                  뉴스 구경하러 가기
+                </button>
               </div>
             )}
-            {displayList.map(n => (
-              <NewsCard key={n.id} news={n} isRead={read.has(n.id)} onRead={(id) => setRead(p => new Set(p).add(id))} />
-            ))}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
+            {isAITab && readSet.size > 0 && (
+              <div className="rounded-2xl p-4 border border-indigo-200 mb-2 shadow-sm"
+                style={{ background:"linear-gradient(135deg,#eef2ff,#f5f3ff)" }}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles size={13} color="#6366f1" />
+                    <span className="text-[12px] font-bold text-indigo-700">나의 관심사 분석</span>
+                  </div>
+                  <button onClick={resetRead}
+                    className="text-[10px] text-indigo-400 hover:bg-indigo-100 border border-indigo-200 rounded-full px-2.5 py-0.5 transition-colors"
+                    style={{ cursor:"pointer" }}>
+                    기록 초기화
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {interest.map(([tag, cnt]) => (
+                    <span key={tag} className="text-[11px] bg-white text-indigo-600 font-semibold px-2.5 py-1 rounded-full border border-indigo-100">
+                      #{tag} <span className="text-indigo-300">x{cnt}</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[10px] text-indigo-400 mt-2.5 flex items-center gap-1">
+                  <Check size={10} /> 총 {readSet.size}개의 기사를 기반으로 추천된 뉴스입니다
+                </p>
+              </div>
+            )}
+
+            {!isLoading && displayList.length === 0 && !(isAITab && !readSet.size) && (
+              <div className="flex flex-col items-center mt-20 text-gray-400">
+                <span className="text-4xl mb-3">📭</span>
+                <p className="text-sm text-center">
+                  {kwFilter ? `#${kwFilter} 관련 뉴스가 없습니다` : isAITab ? "새로 추천할 뉴스가 없습니다 🎉" : "불러오는 중입니다..."}
+                </p>
+              </div>
+            )}
+
+            {!isLoading && displayList.map(news => (
+              <NewsCard key={news.id} news={news}
+                isRead={readSet.has(news.id)} isRec={isAITab}
+                onRead={markRead} onTag={setKwFilter}
+                liked={!!likes[news.id]} bookmarked={!!bmks[news.id]}
+                onLike={toggleLike} onBookmark={toggleBmk}
+              />
+            ))}
+            
+            {!isLoading && tab !== "AI추천" && !kwFilter && displayList.length > 0 && (
+               <div className="py-6 text-center text-[11px] text-gray-400">
+                 현재 수집된 {displayList.length}개의 최신 뉴스를 모두 확인했습니다.
+               </div>
+            )}
+          </div>
+        </div>
+      );
+    }
 
 // ============================================================
 // 준비중(더미) 컴포넌트 — 나중에 실제 기능으로 교체
@@ -3613,7 +3992,8 @@ function App() {
           var inner = window.__ICON_SVGS[name] || "";
           var svgProps = {
             xmlns:"http://www.w3.org/2000/svg", width:size, height:size,
-            viewBox:"0 0 24 24", fill:"none",
+            viewBox:"0 0 24 24",
+            fill: props.fill || "none",
             stroke: props.color || "currentColor",
             strokeWidth: props.strokeWidth != null ? props.strokeWidth : 2,
             strokeLinecap:"round", strokeLinejoin:"round",
@@ -3630,6 +4010,7 @@ function App() {
       const ArrowLeft = makeIcon("ArrowLeft");
       const Bell = makeIcon("Bell");
       const BellOff = makeIcon("BellOff");
+      const Bookmark = makeIcon("Bookmark");
       const BookOpen = makeIcon("BookOpen");
       const Calendar = makeIcon("Calendar");
       const Check = makeIcon("Check");
@@ -3642,6 +4023,7 @@ function App() {
       const Flame = makeIcon("Flame");
       const Globe = makeIcon("Globe");
       const Hash = makeIcon("Hash");
+      const Heart = makeIcon("Heart");
       const Home = makeIcon("Home");
       const Info = makeIcon("Info");
       const Lightbulb = makeIcon("Lightbulb");
@@ -3687,6 +4069,7 @@ function App() {
       names.push("ArrowLeft"); vals.push(ArrowLeft);
       names.push("Bell"); vals.push(Bell);
       names.push("BellOff"); vals.push(BellOff);
+      names.push("Bookmark"); vals.push(Bookmark);
       names.push("BookOpen"); vals.push(BookOpen);
       names.push("Calendar"); vals.push(Calendar);
       names.push("Check"); vals.push(Check);
@@ -3699,6 +4082,7 @@ function App() {
       names.push("Flame"); vals.push(Flame);
       names.push("Globe"); vals.push(Globe);
       names.push("Hash"); vals.push(Hash);
+      names.push("Heart"); vals.push(Heart);
       names.push("Home"); vals.push(Home);
       names.push("Info"); vals.push(Info);
       names.push("Lightbulb"); vals.push(Lightbulb);
