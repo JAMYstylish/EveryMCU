@@ -1820,16 +1820,36 @@ function LearningTrackerFeature({ nickname, onHome }) {
       return found.length > 0 ? found : [text.split(/\s+/)[0].replace(/[^가-힣a-zA-Z0-9]/g, "").slice(0, 10) || "뉴스"];
     }
 
-    function timeAgo(dateStr) {
-      if (!dateStr) return "최근";
-      const d = new Date(dateStr);
-      if (isNaN(d)) return "최근";
-      const s = (Date.now() - d.getTime()) / 1000;
-      if (s < 60)     return "방금 전";
-      if (s < 3600)   return `${Math.floor(s / 60)}분 전`;
-      if (s < 86400)  return `${Math.floor(s / 3600)}시간 전`;
-      if (s < 604800) return `${Math.floor(s / 86400)}일 전`;
-      return d.toLocaleDateString("ko-KR");
+    function parseNewsTimeMs(value, fallbackOffsetMs = 0) {
+      if (!value) return Date.now() - fallbackOffsetMs;
+      const direct = new Date(value);
+      if (!isNaN(direct)) return direct.getTime();
+      const legacy = String(value).trim().match(/^(\d+)\s*(초|분|시간|일|주)\s*전$/);
+      if (!legacy) return Date.now() - fallbackOffsetMs;
+      const unitMs = { "초": 1000, "분": 60000, "시간": 3600000, "일": 86400000, "주": 604800000 };
+      return Date.now() - Number(legacy[1]) * unitMs[legacy[2]];
+    }
+
+    function formatNewsTime(value, fallbackOffsetMs = 0) {
+      const d = new Date(parseNewsTimeMs(value, fallbackOffsetMs));
+      const parts = new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(d).reduce((acc, part) => {
+        if (part.type !== "literal") acc[part.type] = part.value;
+        return acc;
+      }, {});
+      const now = new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        year: "numeric",
+      }).formatToParts(new Date()).find((part) => part.type === "year")?.value;
+      const dateText = parts.year === now ? `${parts.month}.${parts.day}` : `${parts.year}.${parts.month}.${parts.day}`;
+      return `${dateText} ${parts.hour}:${parts.minute}`;
     }
 
     function extractRealUrl(el) {
@@ -1879,10 +1899,10 @@ function LearningTrackerFeature({ nickname, onHome }) {
             
           validNews.push({
             id: `${cat}${i}${Date.now()}`, cat, hot: i < 2,
-            src: src.slice(0, 24), time: timeAgo(pub),
-            timestamp: pub ? new Date(pub).getTime() : Date.now() - i * 60000, 
+            src: src.slice(0, 24), time: formatNewsTime(pub, i * 60000),
+            timestamp: pub ? new Date(pub).getTime() : Date.now() - i * 60000,
             tags: extractTags(title), title: title || "뉴스",
-            body: rawDesc || "본문 요약이 제공되지 않았습니다.", 
+            body: rawDesc || "본문 요약이 제공되지 않았습니다.",
             url: url,
           });
           i++;
@@ -1918,7 +1938,10 @@ function LearningTrackerFeature({ nickname, onHome }) {
       }
 
       console.warn(`[NewsFeature] ${cat} 모든 프록시 응답 실패. Mock 데이터를 제공합니다.`);
-      const mockItems = (MOCK[cat] || []).map((m, i) => ({ ...m, timestamp: Date.now() - i * 3600000 }));
+      const mockItems = (MOCK[cat] || []).map((m, i) => {
+        const timestamp = parseNewsTimeMs(m.time, i * 3600000);
+        return { ...m, timestamp, time: formatNewsTime(m.time, i * 3600000) };
+      });
       return { items: mockItems, source: "mock", proxy: "none" };
     }
 
@@ -2602,37 +2625,105 @@ const asList = value => {
   if (value && typeof value === 'object') return Object.values(value).filter(Boolean);
   return [];
 };
-const normalizeProblems = value => asList(value).map(p => ({
-  ...p,
-  likes: p.likes || 0,
-  dislikes: p.dislikes || 0,
-  solvedCount: p.solvedCount || 0,
-  views: p.views || 0,
-  tags: asList(p.tags),
-  testCases: asList(p.testCases),
-  comments: asList(p.comments),
-  attachments: asList(p.attachments),
-}));
-const normalizeQnaPosts = value => asList(value).map(p => ({
-  ...p,
-  likes: p.likes || 0,
-  dislikes: p.dislikes || 0,
-  points: p.points || 0,
-  views: p.views || 0,
-  status: p.status || 'open',
-  tags: asList(p.tags),
-  answers: asList(p.answers),
-  attachments: asList(p.attachments),
-}));
-const normalizeFreePosts = value => asList(value).map(p => ({
-  ...p,
-  likes: p.likes || 0,
-  dislikes: p.dislikes || 0,
-  views: p.views || 0,
-  isAnonymous: !!p.isAnonymous,
-  comments: asList(p.comments),
-  attachments: asList(p.attachments),
-}));
+const communityNowIso = () => new Date().toISOString();
+const parseCommunityTimeValue = value => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'number' && value > 946684800000) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
+  if (text === '방금' || text === '방금 전') return communityNowIso();
+  const legacy = text.match(/^(\d+)\s*(초|분|시간|일|주|개월|년)\s*전$/);
+  if (!legacy) return null;
+  const amount = Number(legacy[1]);
+  const multipliers = {
+    '초': 1000,
+    '분': 60 * 1000,
+    '시간': 60 * 60 * 1000,
+    '일': 24 * 60 * 60 * 1000,
+    '주': 7 * 24 * 60 * 60 * 1000,
+    '개월': 30 * 24 * 60 * 60 * 1000,
+    '년': 365 * 24 * 60 * 60 * 1000,
+  };
+  return new Date(Date.now() - amount * multipliers[legacy[2]]).toISOString();
+};
+const normalizeCommunityTime = (item, fallbackOffsetMs = 0) => (
+  parseCommunityTimeValue(item?.createdAt) ||
+  parseCommunityTimeValue(item?.time) ||
+  parseCommunityTimeValue(item?.id) ||
+  new Date(Date.now() - fallbackOffsetMs).toISOString()
+);
+const normalizeCommunityEntry = (item, fallbackOffsetMs = 0) => {
+  const createdAt = normalizeCommunityTime(item, fallbackOffsetMs);
+  return { ...item, createdAt, time: createdAt };
+};
+const communityTimeParts = date => {
+  const parts = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  return parts.reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+};
+const formatCommunityTime = value => {
+  const parsed = parseCommunityTimeValue(value);
+  if (!parsed) return value ? String(value) : '';
+  const parts = communityTimeParts(new Date(parsed));
+  const now = communityTimeParts(new Date());
+  const dateText = parts.year === now.year ? `${parts.month}.${parts.day}` : `${parts.year}.${parts.month}.${parts.day}`;
+  return `${dateText} ${parts.hour}:${parts.minute}`;
+};
+const normalizeProblems = value => asList(value).map((p, index) => {
+  const base = normalizeCommunityEntry(p, index * 60 * 60 * 1000);
+  return {
+    ...base,
+    likes: p.likes || 0,
+    dislikes: p.dislikes || 0,
+    solvedCount: p.solvedCount || 0,
+    views: p.views || 0,
+    tags: asList(p.tags),
+    testCases: asList(p.testCases),
+    comments: asList(p.comments).map((c, cIndex) => normalizeCommunityEntry(c, (index * 6 + cIndex + 1) * 10 * 60 * 1000)),
+    attachments: asList(p.attachments),
+  };
+});
+const normalizeQnaPosts = value => asList(value).map((p, index) => {
+  const base = normalizeCommunityEntry(p, index * 60 * 60 * 1000);
+  return {
+    ...base,
+    likes: p.likes || 0,
+    dislikes: p.dislikes || 0,
+    points: p.points || 0,
+    views: p.views || 0,
+    status: p.status || 'open',
+    tags: asList(p.tags),
+    answers: asList(p.answers).map((a, aIndex) => normalizeCommunityEntry(a, (index * 6 + aIndex + 1) * 10 * 60 * 1000)),
+    attachments: asList(p.attachments),
+  };
+});
+const normalizeFreePosts = value => asList(value).map((p, index) => {
+  const base = normalizeCommunityEntry(p, index * 60 * 60 * 1000);
+  return {
+    ...base,
+    likes: p.likes || 0,
+    dislikes: p.dislikes || 0,
+    views: p.views || 0,
+    isAnonymous: !!p.isAnonymous,
+    comments: asList(p.comments).map((c, cIndex) => normalizeCommunityEntry(c, (index * 6 + cIndex + 1) * 10 * 60 * 1000)),
+    attachments: asList(p.attachments),
+  };
+});
 const REWARDS = [
   { id: 1, name: '골드 프레임',     cost: 500,  icon: '🖼️', desc: '프로필 골드 테두리',    effect: 'gold-frame' },
   { id: 2, name: '왕관 뱃지',       cost: 1000, icon: '👑', desc: '닉네임 옆 왕관',        effect: 'crown' },
@@ -3077,7 +3168,8 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
   };
   const handleAddComment = () => {
     if (!newComment.trim()) return;
-    const c = { id: Date.now(), author: nickname, text: newComment, likes: 0, time: '방금' };
+    const createdAt = communityNowIso();
+    const c = { id: Date.now(), author: nickname, text: newComment, likes: 0, createdAt, time: createdAt };
     setSelected(s => ({ ...s, comments: [...s.comments, c] }));
     setProblems(ps => ps.map(p => p.id === selected.id ? { ...p, comments: [...p.comments, c] } : p));
     setNewComment('');
@@ -3096,7 +3188,8 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
   };
   const handlePost = () => {
     if (!nTitle.trim() || !nDesc.trim()) return;
-    const np = { id: Date.now(), title: nTitle, author: nickname, difficulty: nDiff, description: nDesc, testCases: nTestCases.filter(tc => tc.input.trim() || tc.output.trim()), likes: 0, dislikes: 0, solvedCount: 0, views: 0, tags: nTags.split(',').map(t => t.trim()).filter(Boolean), comments: [], attachments: nFiles };
+    const createdAt = communityNowIso();
+    const np = { id: Date.now(), title: nTitle, author: nickname, difficulty: nDiff, description: nDesc, testCases: nTestCases.filter(tc => tc.input.trim() || tc.output.trim()), likes: 0, dislikes: 0, solvedCount: 0, views: 0, tags: nTags.split(',').map(t => t.trim()).filter(Boolean), comments: [], attachments: nFiles, createdAt, time: createdAt };
     setProblems(ps => [np, ...ps]); setNTitle(''); setNDesc(''); setNTestCases(EMPTY_TC()); setNTags(''); setNFiles([]); setView('list');
   };
   const handleDelete = id => { setProblems(ps => ps.filter(p => p.id !== id)); goList(); };
@@ -3339,7 +3432,7 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
                 <div className="flex items-center justify-between mb-1">
                   <NickChip name={c.author} onViewProfile={onViewProfile} className="text-xs font-bold text-gray-600" size="sm" />
                   <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-gray-400">{c.time}</span>
+                    <span className="text-[10px] text-gray-400">{formatCommunityTime(c.createdAt || c.time)}</span>
                     {c.author === nickname && editCommentId !== c.id && <>
                       <button onClick={() => { setEditCommentId(c.id); setEditCommentText(c.text); }} className="text-[10px] text-blue-400 hover:text-blue-600 px-1"><Edit2 size={10} /></button>
                       <button type="button" onClick={() => setConfirmComment(c.id)} className="text-[10px] text-red-400 hover:text-red-600 px-1"><Trash2 size={10} /></button>
@@ -3453,7 +3546,8 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
   };
   const handleAddAnswer = () => {
     if (!answerText.trim()) return;
-    const a = { id: Date.now(), author: nickname, content: answerText, likes: 0, adopted: false, time: '방금' };
+    const createdAt = communityNowIso();
+    const a = { id: Date.now(), author: nickname, content: answerText, likes: 0, adopted: false, createdAt, time: createdAt };
     setSelected(s => ({ ...s, answers: [...s.answers, a] }));
     setQnaPosts(ps => ps.map(p => p.id === selected.id ? { ...p, answers: [...p.answers, a] } : p));
     setAnswerText('');
@@ -3479,7 +3573,8 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
   };
   const handlePost = () => {
     if (!nTitle.trim() || !nContent.trim()) return;
-    const np = { id: Date.now(), title: nTitle, author: nickname, points: nPoints, status: 'open', views: 0, likes: 0, dislikes: 0, content: nContent, tags: nTags.split(',').map(t => t.trim()).filter(Boolean), answers: [], time: '방금', attachments: nFiles };
+    const createdAt = communityNowIso();
+    const np = { id: Date.now(), title: nTitle, author: nickname, points: nPoints, status: 'open', views: 0, likes: 0, dislikes: 0, content: nContent, tags: nTags.split(',').map(t => t.trim()).filter(Boolean), answers: [], createdAt, time: createdAt, attachments: nFiles };
     setQnaPosts(ps => [np, ...ps]); setUserPoints(pt => pt - nPoints); setNTitle(''); setNContent(''); setNTags(''); setNPoints(50); setNFiles([]); setView('list');
   };
   const handleDelete = id => { setQnaPosts(ps => ps.filter(p => p.id !== id)); goList(); };
@@ -3581,7 +3676,7 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
           <AttachList files={selected.attachments} />
           <div className="flex gap-3 text-xs text-gray-400">
             <NickChip name={selected.author} onViewProfile={onViewProfile} className="flex items-center gap-1 text-xs text-gray-400" size="xs" />
-            <span className="flex items-center gap-1"><Clock size={10} />{selected.time}</span>
+            <span className="flex items-center gap-1"><Clock size={10} />{formatCommunityTime(selected.createdAt || selected.time)}</span>
             <span className="flex items-center gap-1 text-amber-600 font-bold"><Trophy size={10} />{selected.points} P</span>
             <span className="flex items-center gap-1"><Eye size={10} />{selected.views || 0}</span>
           </div>
@@ -3597,7 +3692,7 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold text-gray-700 flex items-center gap-1">{a.adopted && <Crown size={11} className="text-amber-500" />}<NickChip name={a.author} onViewProfile={onViewProfile} className="font-bold" size="xs" /></span>
               <div className="flex items-center gap-1">
-                <span className="text-[10px] text-gray-400">{a.time}</span>
+                <span className="text-[10px] text-gray-400">{formatCommunityTime(a.createdAt || a.time)}</span>
                 {(a.author === nickname || isAdmin) && !a.adopted && editAnswerId !== a.id && <>
                   <button onClick={() => { setEditAnswerId(a.id); setEditAnswerText(a.content); }} className="text-[10px] text-blue-400 hover:text-blue-600 px-1"><Edit2 size={10} /></button>
                   <button type="button" onClick={() => setConfirmAnswer(a.id)} className="text-[10px] text-red-400 hover:text-red-600 px-1"><Trash2 size={10} /></button>
@@ -3703,7 +3798,8 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
   };
   const handleAddComment = () => {
     if (!newComment.trim()) return;
-    const c = { id: Date.now(), author: commentAnon ? '익명' : nickname, isAnonymous: commentAnon, text: newComment, likes: 0, time: '방금' };
+    const createdAt = communityNowIso();
+    const c = { id: Date.now(), author: commentAnon ? '익명' : nickname, isAnonymous: commentAnon, text: newComment, likes: 0, createdAt, time: createdAt };
     setSelected(s => ({ ...s, comments: [...s.comments, c] }));
     setFreePosts(ps => ps.map(p => p.id === selected.id ? { ...p, comments: [...p.comments, c] } : p));
     setNewComment('');
@@ -3722,7 +3818,8 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
   };
   const handlePost = () => {
     if (!nTitle.trim() || !nContent.trim()) return;
-    const np = { id: Date.now(), title: nTitle, author: isAnon ? '익명' : nickname, isAnonymous: isAnon, content: nContent, likes: 0, dislikes: 0, views: 0, time: '방금', comments: [], attachments: nFiles };
+    const createdAt = communityNowIso();
+    const np = { id: Date.now(), title: nTitle, author: isAnon ? '익명' : nickname, isAnonymous: isAnon, content: nContent, likes: 0, dislikes: 0, views: 0, createdAt, time: createdAt, comments: [], attachments: nFiles };
     setFreePosts(ps => [np, ...ps]); setNTitle(''); setNContent(''); setIsAnon(false); setNFiles([]); setView('list');
   };
   const handleDelete = id => { setFreePosts(ps => ps.filter(p => p.id !== id)); goList(); };
@@ -3791,7 +3888,7 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
           <h3 className="font-bold text-gray-800 text-base mb-1">{selected.title}</h3>
           <div className="flex items-center gap-2 mb-3 text-[11px] text-gray-400">
             <NickChip name={selected.author} isAnon={selected.isAnonymous} onViewProfile={onViewProfile} className="flex items-center gap-1 text-[11px] text-gray-400" size="xs" />
-            <span className="flex items-center gap-1"><Clock size={10} />{selected.time}</span>
+            <span className="flex items-center gap-1"><Clock size={10} />{formatCommunityTime(selected.createdAt || selected.time)}</span>
             <span className="flex items-center gap-1"><Eye size={10} />{selected.views || 0}</span>
           </div>
           {renderContent(selected.content, selected.attachments, setLightbox)}
@@ -3811,7 +3908,7 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
                   <div className="flex items-center justify-between mb-1">
                     <NickChip name={c.author} isAnon={c.isAnonymous} onViewProfile={onViewProfile} className="flex items-center gap-1 text-xs font-bold text-gray-600" size="xs" />
                     <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-gray-400">{c.time}</span>
+                      <span className="text-[10px] text-gray-400">{formatCommunityTime(c.createdAt || c.time)}</span>
                       {canEdit && editCommentId !== c.id && <>
                         <button onClick={() => { setEditCommentId(c.id); setEditCommentText(c.text); }} className="text-[10px] text-blue-400 hover:text-blue-600 px-1"><Edit2 size={10} /></button>
                         <button type="button" onClick={() => setConfirmComment(c.id)} className="text-[10px] text-red-400 hover:text-red-600 px-1"><Trash2 size={10} /></button>
@@ -4207,7 +4304,7 @@ function CommunityFeature({ nickname, onHome }) {
                     <div className="flex items-start justify-between mb-1"><p className="font-bold text-sm text-gray-800 flex-1 pr-2 line-clamp-1">{p.title}</p><Badge text={p.boardLabel} color={p.boardColor} /></div>
                     <p className="text-xs text-gray-500 line-clamp-2 mb-2">{p.snippet}</p>
                     <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                      <span className="flex items-center gap-0.5"><Clock size={10} />{p.time}</span>
+                      <span className="flex items-center gap-0.5"><Clock size={10} />{formatCommunityTime(p.createdAt || p.time)}</span>
                       {p.likes !== undefined && <span className="flex items-center gap-0.5 text-blue-400"><ThumbsUp size={10} />{p.likes}</span>}
                       {p.comments !== undefined && <span className="flex items-center gap-0.5"><MessageSquare size={10} />{p.comments.length}</span>}
                     </div>
@@ -4224,7 +4321,7 @@ function CommunityFeature({ nickname, onHome }) {
                   <button key={i} onClick={() => goToPost(c.boardId, c.postId, true)} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 text-left active:scale-[0.98] transition-transform">
                     <div className="flex items-start justify-between mb-1"><p className="text-[10px] text-gray-400 flex-1 line-clamp-1">📌 {c.postTitle}</p><Badge text={c.isAnswer ? '답변' : c.boardLabel} color={c.isAnswer ? 'bg-emerald-100 text-emerald-600' : c.boardColor} /></div>
                     <p className="text-sm text-gray-700 line-clamp-2 mb-1">{c.text}</p>
-                    <span className="text-[10px] text-gray-400 flex items-center gap-1"><Clock size={10} />{c.time}</span>
+                    <span className="text-[10px] text-gray-400 flex items-center gap-1"><Clock size={10} />{formatCommunityTime(c.createdAt || c.time)}</span>
                   </button>
                 ))}
               </div>
@@ -4243,7 +4340,7 @@ function CommunityFeature({ nickname, onHome }) {
                       <div className="flex items-start justify-between mb-1"><p className="font-bold text-sm text-gray-800 flex-1 pr-2 line-clamp-1">{p.title}</p><Badge text={p.boardLabel} color={p.boardColor} /></div>
                       <p className="text-xs text-gray-500 line-clamp-2 mb-2">{p.snippet}</p>
                       <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                        <span className="flex items-center gap-0.5"><Clock size={10} />{p.time}</span>
+                        <span className="flex items-center gap-0.5"><Clock size={10} />{formatCommunityTime(p.createdAt || p.time)}</span>
                         <span className={`flex items-center gap-0.5 font-bold ${isLike ? 'text-blue-400' : 'text-red-400'}`}>
                           {isLike ? <ThumbsUp size={10} /> : <ThumbsDown size={10} />}{isLike ? p.likes : p.dislikes}
                         </span>
