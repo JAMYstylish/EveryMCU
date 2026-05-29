@@ -4693,6 +4693,89 @@ const NotificationCenter = ({ notifications, unreadCount, open, onToggle, onClos
   </div>
 );
 
+const PATCH_NOTES = [
+  {
+    date: "2026.05.29",
+    title: "실사용 편의 개선",
+    summary: "알림, 시간 표시, 최신기사 로딩을 다듬었어요.",
+    items: [
+      "최신기사 탭에 캐시를 적용해 다시 들어갈 때 기사 목록이 바로 보이도록 개선",
+      "본인 글에 댓글이나 답변이 달리면 공통 알림에 쌓이도록 추가",
+      "커뮤니티와 최신기사의 시간을 '방금' 대신 실제 날짜와 시간으로 표시",
+    ],
+  },
+  {
+    date: "2026.05.28",
+    title: "계정·프로필·홈 화면 정리",
+    summary: "사용자별 데이터와 앱 홈 사용감을 안정화했어요.",
+    items: [
+      "닉네임과 숫자 비밀번호 기반 로그인/회원가입 추가",
+      "학습추적, 알람, 커뮤니티 등 주요 데이터를 닉네임 기준 DB 저장 방식으로 정리",
+      "홈 화면 메뉴를 짧은 타일형 버튼으로 변경",
+      "홈에서 아바타를 바로 수정하고 커뮤니티/주간코황에서 같은 아바타를 표시",
+      "커뮤니티 흰 화면 문제와 데이터 정규화 문제 수정",
+      "최신기사 기능을 통합 앱에 교체 적용",
+      "Firebase Hosting/Realtime Database 기반 통합 앱 배포 구성",
+    ],
+  },
+  {
+    date: "2026.05.24",
+    title: "주간코황 기능 시작",
+    summary: "코딩 배틀과 이주의 코딩 기능 기반을 만들었어요.",
+    items: [
+      "주간코황 React 기능 컴포넌트 추가",
+      "1:1 기록전, 실시간 대전, 이주의 코딩, 버그 찾기, 랭킹 기반 구현",
+      "팀 공유용 README와 배포 안내 정리",
+    ],
+  },
+];
+
+const PatchNotesModal = ({ onClose }) => (
+  <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 px-3 pb-3 pt-10 backdrop-blur-sm">
+    <button type="button" aria-label="패치노트 닫기" onClick={onClose} className="absolute inset-0 cursor-default" />
+    <section className="relative max-h-[82vh] w-full max-w-[390px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
+      <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+        <div>
+          <p className="text-[11px] font-black uppercase text-indigo-500">EveryMCU Updates</p>
+          <h2 className="text-lg font-black text-gray-900">패치노트</h2>
+        </div>
+        <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-500 active:scale-95" aria-label="닫기">
+          <X size={16} />
+        </button>
+      </div>
+      <div className="max-h-[68vh] overflow-y-auto bg-slate-50 px-4 py-4">
+        <div className="space-y-3">
+          {PATCH_NOTES.map((note, index) => (
+            <article key={note.date} className="rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${index === 0 ? "bg-indigo-600 text-white" : "bg-indigo-50 text-indigo-600"}`}>
+                  <Calendar size={17} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-black text-gray-500">{note.date}</span>
+                    {index === 0 && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-black text-rose-500">최신</span>}
+                  </div>
+                  <h3 className="mt-2 text-base font-black text-gray-900">{note.title}</h3>
+                  <p className="mt-1 text-[13px] font-semibold leading-5 text-gray-500">{note.summary}</p>
+                  <div className="mt-3 space-y-2">
+                    {note.items.map((item) => (
+                      <div key={item} className="flex items-start gap-2">
+                        <Check size={13} className="mt-0.5 shrink-0 text-indigo-500" />
+                        <p className="text-[13px] font-medium leading-5 text-gray-700">{item}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  </div>
+);
+
 // ============================================================
 // 탭 설정
 // ============================================================
@@ -4822,6 +4905,7 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
   const [activeTab, setActiveTab] = useState(null);
   const [showAvatarEdit, setShowAvatarEdit] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [communityTarget, setCommunityTarget] = useState(null);
   const [avatarLevel, setAvatarLevel] = useState(1);
   const publicProfile = usePublicProfile(nickname);
@@ -4920,6 +5004,27 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
                 );
               })}
             </div>
+            <button
+              type="button"
+              onClick={() => setShowPatchNotes(true)}
+              className="mt-4 w-full rounded-3xl border border-indigo-100 bg-white p-4 text-left shadow-sm shadow-indigo-100/60 transition active:scale-[0.98]"
+            >
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+                  <Info size={19} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-black text-gray-900">최근 업데이트</p>
+                    <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-black text-rose-500">NEW</span>
+                  </div>
+                  <p className="mt-1 text-[12px] font-semibold leading-5 text-gray-500">
+                    {PATCH_NOTES[0].date} · {PATCH_NOTES[0].summary}
+                  </p>
+                </div>
+                <ChevronRight size={17} className="mt-3 shrink-0 text-gray-300" />
+              </div>
+            </button>
           </div>
         ) : (
           <div className="h-full">
@@ -4934,6 +5039,7 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
         )}
       </main>
       {showAvatarEdit&&<ProfileEditModal avatar={publicProfile.avatar} level={avatarLevel} onSave={handleSaveHomeAvatar} onClose={()=>setShowAvatarEdit(false)}/>}
+      {showPatchNotes&&<PatchNotesModal onClose={()=>setShowPatchNotes(false)}/>}
       <nav className="shrink-0 flex items-center justify-around px-2 py-2 border-t"
         style={{ background: "white", borderColor: "#e8eaf6", boxShadow: "0 -4px 20px rgba(99,102,241,0.08)", paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom))" }}>
         <button onClick={() => setActiveTab(null)}
