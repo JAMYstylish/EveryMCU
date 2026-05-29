@@ -2724,6 +2724,47 @@ const normalizeFreePosts = value => asList(value).map((p, index) => {
     attachments: asList(p.attachments),
   };
 });
+const BOARD_LABEL_BY_ID = { coding: '코딩 문제', qna: 'Q&A', free: '자유게시판' };
+const NOTIFICATION_LIMIT = 80;
+const notificationCacheKey = nickname => scopedLocalKey('everymcu-notifications', nickname || 'guest');
+const normalizeNotifications = value => asList(value)
+  .map((item, index) => {
+    const createdAt = parseCommunityTimeValue(item?.createdAt) || parseCommunityTimeValue(item?.time) || new Date(Date.now() - index * 1000).toISOString();
+    return {
+      ...item,
+      id: String(item?.id ?? `${createdAt}-${index}`),
+      createdAt,
+      read: !!item?.read,
+    };
+  })
+  .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+  .slice(0, NOTIFICATION_LIMIT);
+const createCommunityNotification = ({ targetNickname, actor, actorIsAnonymous = false, board, post, entry, kind = 'comment' }) => {
+  const cleanTarget = cleanProfileNickname(targetNickname);
+  const cleanActor = cleanProfileNickname(actor);
+  if (!cleanTarget || cleanTarget === '익명') return;
+  if (!actorIsAnonymous && cleanActor && cleanTarget === cleanActor) return;
+
+  const createdAt = parseCommunityTimeValue(entry?.createdAt) || communityNowIso();
+  const entryText = String(entry?.text || entry?.content || '').trim();
+  const id = `${board}-${post?.id || 'post'}-${entry?.id || Date.now()}`;
+  const actorName = actorIsAnonymous ? '익명' : cleanActor || '알 수 없음';
+  const notification = {
+    id,
+    type: kind === 'answer' ? 'communityAnswer' : 'communityComment',
+    board,
+    boardLabel: BOARD_LABEL_BY_ID[board] || '커뮤니티',
+    postId: post?.id ?? null,
+    postTitle: post?.title || '게시글',
+    actor: actorName,
+    actorIsAnonymous,
+    body: entryText.slice(0, 120),
+    message: `${actorName}님이 ${kind === 'answer' ? '답변' : '댓글'}을 남겼어요.`,
+    createdAt,
+    read: false,
+  };
+  cloudPut(['users', cleanTarget, 'notifications', id], notification);
+};
 const REWARDS = [
   { id: 1, name: '골드 프레임',     cost: 500,  icon: '🖼️', desc: '프로필 골드 테두리',    effect: 'gold-frame' },
   { id: 2, name: '왕관 뱃지',       cost: 1000, icon: '👑', desc: '닉네임 옆 왕관',        effect: 'crown' },
@@ -3133,6 +3174,19 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
   const [confirmComment, setConfirmComment] = useState(null);
 
   const goList = () => { setView('list'); setSelected(null); setJudgeResult(null); setCode(''); codeRef.current = ''; setJudgeDetail(null); if (onClearInitPost) onClearInitPost(); };
+  const openedInitPostRef = useRef(initPostId || null);
+  useEffect(() => {
+    if (!initPostId || openedInitPostRef.current === initPostId) return;
+    const target = problems.find(p => String(p.id) === String(initPostId));
+    if (!target) return;
+    openedInitPostRef.current = initPostId;
+    setSelected(target);
+    setView('detail');
+    setJudgeResult(null);
+    setCode('');
+    codeRef.current = '';
+    setJudgeDetail(null);
+  }, [initPostId, problems]);
   const handleLangChange = async l => {
     setLang(l); setCode(''); codeRef.current = ''; setJudgeResult(null); setJudgeDetail(null);
     if (l === 'py' && pyStatus === 'idle') { setPyStatus('loading'); try { await getPyodide(); setPyStatus('ready'); } catch { setPyStatus('error'); } }
@@ -3172,6 +3226,7 @@ function CodingBoard({ nickname, isAdmin = false, problems, setProblems, initPos
     const c = { id: Date.now(), author: nickname, text: newComment, likes: 0, createdAt, time: createdAt };
     setSelected(s => ({ ...s, comments: [...s.comments, c] }));
     setProblems(ps => ps.map(p => p.id === selected.id ? { ...p, comments: [...p.comments, c] } : p));
+    createCommunityNotification({ targetNickname: selected.author, actor: nickname, board: 'coding', post: selected, entry: c });
     setNewComment('');
   };
   const handleSaveComment = cid => {
@@ -3520,6 +3575,16 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
   const [lightbox, setLightbox] = useState(null);
 
   const goList = () => { setView('list'); setSelected(null); if (onClearInitPost) onClearInitPost(); };
+  const openedInitPostRef = useRef(initPostId || null);
+  useEffect(() => {
+    if (!initPostId || openedInitPostRef.current === initPostId) return;
+    const target = qnaPosts.find(p => String(p.id) === String(initPostId));
+    if (!target) return;
+    openedInitPostRef.current = initPostId;
+    setSelected(target);
+    setView('detail');
+    setAnswerText('');
+  }, [initPostId, qnaPosts]);
   const openPost = p => { setQnaPosts(ps => ps.map(x => x.id === p.id ? { ...x, views: (x.views || 0) + 1 } : x)); setSelected({ ...p, views: (p.views || 0) + 1 }); setView('detail'); setAnswerText(''); };
   const handleReact = (id, type) => {
     const key = `${boardPrefix}_${id}`; const prev = myReactions[key]; const next = prev === type ? undefined : type;
@@ -3550,6 +3615,7 @@ function QnABoard({ nickname, isAdmin = false, qnaPosts, setQnaPosts, userPoints
     const a = { id: Date.now(), author: nickname, content: answerText, likes: 0, adopted: false, createdAt, time: createdAt };
     setSelected(s => ({ ...s, answers: [...s.answers, a] }));
     setQnaPosts(ps => ps.map(p => p.id === selected.id ? { ...p, answers: [...p.answers, a] } : p));
+    createCommunityNotification({ targetNickname: selected.author, actor: nickname, board: 'qna', post: selected, entry: a, kind: 'answer' });
     setAnswerText('');
   };
   const handleSaveAnswer = aid => {
@@ -3789,6 +3855,15 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
   const [editCommentId, setEditCommentId] = useState(null); const [editCommentText, setEditCommentText] = useState('');
 
   const goList = () => { setView('list'); setSelected(null); if (onClearInitPost) onClearInitPost(); };
+  const openedInitPostRef = useRef(initPostId || null);
+  useEffect(() => {
+    if (!initPostId || openedInitPostRef.current === initPostId) return;
+    const target = freePosts.find(p => String(p.id) === String(initPostId));
+    if (!target) return;
+    openedInitPostRef.current = initPostId;
+    setSelected(target);
+    setView('detail');
+  }, [initPostId, freePosts]);
   const openPost = p => { setFreePosts(ps => ps.map(x => x.id === p.id ? { ...x, views: (x.views || 0) + 1 } : x)); setSelected({ ...p, views: (p.views || 0) + 1 }); setView('detail'); };
   const handleReact = (postId, type) => {
     const key = `${boardPrefix}_${postId}`; const prev = myReactions[key]; const next = prev === type ? undefined : type;
@@ -3802,6 +3877,7 @@ function FreeBoard({ nickname, isAdmin = false, freePosts, setFreePosts, initPos
     const c = { id: Date.now(), author: commentAnon ? '익명' : nickname, isAnonymous: commentAnon, text: newComment, likes: 0, createdAt, time: createdAt };
     setSelected(s => ({ ...s, comments: [...s.comments, c] }));
     setFreePosts(ps => ps.map(p => p.id === selected.id ? { ...p, comments: [...p.comments, c] } : p));
+    createCommunityNotification({ targetNickname: selected.isAnonymous || selected.author === nickname ? null : selected.author, actor: c.author, actorIsAnonymous: c.isAnonymous, board: 'free', post: selected, entry: c });
     setNewComment('');
   };
   const handleSaveComment = cid => {
@@ -3997,7 +4073,7 @@ const syncCommunityBoard = async (boardKey, list, savedIdsRef) => {
   await Promise.all([...writes, ...deletes]);
   savedIdsRef.current[boardKey] = nextIds;
 };
-function CommunityFeature({ nickname, onHome }) {
+function CommunityFeature({ nickname, onHome, initialCommunityTarget, onCommunityTargetHandled }) {
   const publicProfile = usePublicProfile(nickname);
   const [problems, setProblems]     = useState(() => normalizeProblems(lsGet('mcu_problems', INIT_PROBLEMS)));
   const [qnaPosts, setQnaPosts]     = useState(() => normalizeQnaPosts(lsGet('mcu_qna', INIT_QNA)));
@@ -4035,6 +4111,15 @@ function CommunityFeature({ nickname, onHome }) {
   useEffect(() => lsSet(reactionsKey, myReactions), [myReactions]);
   const [communityCloudReady, setCommunityCloudReady] = useState(false);
   const [profileCloudReady, setProfileCloudReady] = useState(false);
+
+  useEffect(() => {
+    if (!initialCommunityTarget?.board || initialCommunityTarget.postId === undefined || initialCommunityTarget.postId === null) return;
+    setShowMyPosts(false);
+    setShowProfile(false);
+    setViewingProfile(null);
+    setNav({ board: initialCommunityTarget.board, postId: initialCommunityTarget.postId, fromMyPosts: false });
+    if (onCommunityTargetHandled) onCommunityTargetHandled();
+  }, [initialCommunityTarget?.id]);
 
   useEffect(() => {
     let alive = true;
@@ -4404,6 +4489,152 @@ function CommunityFeature({ nickname, onHome }) {
   );
 }
 
+const useAppNotifications = (nickname) => {
+  const [notifications, setNotifications] = useState(() => {
+    try { return normalizeNotifications(JSON.parse(localStorage.getItem(notificationCacheKey(nickname)) || '[]')); }
+    catch { return []; }
+  });
+  const [loaded, setLoaded] = useState(false);
+
+  const loadNotifications = useCallback(async () => {
+    const data = await cloudGet(['users', nickname || 'guest', 'notifications'], null);
+    const next = normalizeNotifications(data);
+    setNotifications(next);
+    setLoaded(true);
+    try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify(next)); } catch {}
+  }, [nickname]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const data = await cloudGet(['users', nickname || 'guest', 'notifications'], null);
+      if (!alive) return;
+      const next = normalizeNotifications(data);
+      setNotifications(next);
+      setLoaded(true);
+      try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify(next)); } catch {}
+    };
+    load();
+    const id = setInterval(load, 7000);
+    return () => { alive = false; clearInterval(id); };
+  }, [nickname]);
+
+  const markRead = (id) => {
+    setNotifications(prev => {
+      const next = prev.map(item => item.id === id ? { ...item, read: true } : item);
+      try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify(next)); } catch {}
+      return next;
+    });
+    cloudPatch(['users', nickname || 'guest', 'notifications', id], { read: true, readAt: cloudNow() });
+  };
+
+  const markAllRead = () => {
+    const unread = notifications.filter(item => !item.read);
+    if (!unread.length) return;
+    const readAt = cloudNow();
+    const next = notifications.map(item => ({ ...item, read: true, readAt: item.readAt || readAt }));
+    setNotifications(next);
+    try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify(next)); } catch {}
+    unread.forEach(item => cloudPatch(['users', nickname || 'guest', 'notifications', item.id], { read: true, readAt }));
+  };
+
+  const removeNotification = (id) => {
+    setNotifications(prev => {
+      const next = prev.filter(item => item.id !== id);
+      try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify(next)); } catch {}
+      return next;
+    });
+    cloudDelete(['users', nickname || 'guest', 'notifications', id]);
+  };
+
+  const clearAll = () => {
+    setNotifications([]);
+    try { localStorage.setItem(notificationCacheKey(nickname), JSON.stringify([])); } catch {}
+    cloudDelete(['users', nickname || 'guest', 'notifications']);
+  };
+
+  return {
+    notifications,
+    loaded,
+    unreadCount: notifications.filter(item => !item.read).length,
+    loadNotifications,
+    markRead,
+    markAllRead,
+    removeNotification,
+    clearAll,
+  };
+};
+
+const NotificationCenter = ({ notifications, unreadCount, open, onToggle, onClose, onOpenNotification, onMarkAllRead, onDeleteNotification, onClearAll }) => (
+  <div className="relative">
+    {open && <button type="button" aria-label="알림 닫기" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-transparent" />}
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`relative flex h-8 w-8 items-center justify-center rounded-full transition active:scale-95 ${open ? 'bg-white text-indigo-700' : 'bg-white/10 text-indigo-100'}`}
+      aria-label="알림"
+    >
+      <Bell size={16} />
+      {unreadCount > 0 && (
+        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-black leading-none text-white">
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+      )}
+    </button>
+    {open && (
+      <section className="absolute right-0 top-10 z-50 w-[340px] max-w-[calc(100vw-28px)] overflow-hidden rounded-3xl border border-indigo-100 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-black text-gray-900">알림</h3>
+            <p className="text-[11px] font-semibold text-gray-400">내 글에 달린 댓글과 답변</p>
+          </div>
+          <div className="flex items-center gap-1">
+            {unreadCount > 0 && (
+              <button type="button" onClick={onMarkAllRead} className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-black text-indigo-600 active:scale-95">
+                모두 읽음
+              </button>
+            )}
+            {notifications.length > 0 && (
+              <button type="button" onClick={onClearAll} className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-black text-gray-500 active:scale-95">
+                비우기
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-h-[360px] overflow-y-auto bg-slate-50 p-2">
+          {notifications.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-8 text-center">
+              <Bell size={22} className="mx-auto text-gray-300" />
+              <p className="mt-2 text-sm font-black text-gray-700">아직 알림이 없어요</p>
+              <p className="mt-1 text-[12px] font-medium leading-5 text-gray-400">내 글에 댓글이 달리면 여기에 쌓입니다.</p>
+            </div>
+          ) : notifications.map(item => (
+            <article key={item.id} className={`mb-2 rounded-2xl border bg-white p-3 shadow-sm ${item.read ? 'border-gray-100' : 'border-indigo-200 ring-1 ring-indigo-100'}`}>
+              <div className="flex items-start gap-2">
+                <button type="button" onClick={() => onOpenNotification(item)} className="min-w-0 flex-1 text-left">
+                  <div className="flex items-center gap-1.5">
+                    {!item.read && <span className="h-2 w-2 rounded-full bg-indigo-500" />}
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${item.board === 'free' ? 'bg-purple-50 text-purple-600' : item.board === 'qna' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                      {item.boardLabel || BOARD_LABEL_BY_ID[item.board] || '커뮤니티'}
+                    </span>
+                    <span className="text-[10px] font-bold text-gray-400">{formatCommunityTime(item.createdAt)}</span>
+                  </div>
+                  <p className="mt-1 text-sm font-black leading-5 text-gray-900">{item.message || '새 댓글이 달렸어요.'}</p>
+                  <p className="mt-0.5 truncate text-[12px] font-bold text-gray-600">{item.postTitle}</p>
+                  {item.body && <p className="mt-1 line-clamp-2 text-[12px] font-medium leading-5 text-gray-500">{item.body}</p>}
+                </button>
+                <button type="button" onClick={() => onDeleteNotification(item.id)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-50 text-gray-400 active:scale-95" aria-label="알림 삭제">
+                  <X size={13} />
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    )}
+  </div>
+);
+
 // ============================================================
 // 탭 설정
 // ============================================================
@@ -4532,8 +4763,18 @@ const NicknameScreen = ({ onConfirm, error }) => {
 const HomeScreen = ({ nickname, onChangeNickname }) => {
   const [activeTab, setActiveTab] = useState(null);
   const [showAvatarEdit, setShowAvatarEdit] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [communityTarget, setCommunityTarget] = useState(null);
   const [avatarLevel, setAvatarLevel] = useState(1);
   const publicProfile = usePublicProfile(nickname);
+  const {
+    notifications,
+    unreadCount,
+    markRead,
+    markAllRead,
+    removeNotification,
+    clearAll,
+  } = useAppNotifications(nickname);
   const activeTabData = TABS.find((t) => t.id === activeTab);
   const gradients = {
     alarm: "from-rose-400 to-pink-500", weekly: "from-violet-400 to-purple-500",
@@ -4556,6 +4797,14 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
     savePublicProfile(nickname, { avatar: nextAvatar });
     setShowAvatarEdit(false);
   };
+  const handleOpenNotification = (notification) => {
+    markRead(notification.id);
+    setShowNotifications(false);
+    if (notification.board && notification.postId !== undefined && notification.postId !== null) {
+      setCommunityTarget({ id: `${notification.id}-${Date.now()}`, board: notification.board, postId: notification.postId });
+      setActiveTab("community");
+    }
+  };
 
   return (
     <div className="fixed inset-0 flex flex-col" style={{ background: "#f5f7ff" }}>
@@ -4567,6 +4816,17 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
         </div>
         <div className="flex items-center gap-2">
           <SyncStatusBadge />
+          <NotificationCenter
+            notifications={notifications}
+            unreadCount={unreadCount}
+            open={showNotifications}
+            onToggle={() => setShowNotifications(v => !v)}
+            onClose={() => setShowNotifications(false)}
+            onOpenNotification={handleOpenNotification}
+            onMarkAllRead={markAllRead}
+            onDeleteNotification={removeNotification}
+            onClearAll={clearAll}
+          />
           <button type="button" onClick={() => setShowAvatarEdit(true)} className="rounded-full bg-white/10 p-1 active:scale-95 transition-transform" aria-label="아바타 편집">
             <ProfileAvatar avatar={publicProfile.avatar} nickname={nickname} size="xs" />
           </button>
@@ -4605,7 +4865,13 @@ const HomeScreen = ({ nickname, onChangeNickname }) => {
           </div>
         ) : (
           <div className="h-full">
-            <activeTabData.Component nickname={nickname} avatar={publicProfile.avatar} onHome={() => setActiveTab(null)} />
+            <activeTabData.Component
+              nickname={nickname}
+              avatar={publicProfile.avatar}
+              onHome={() => setActiveTab(null)}
+              initialCommunityTarget={activeTab === 'community' ? communityTarget : null}
+              onCommunityTargetHandled={() => setCommunityTarget(null)}
+            />
           </div>
         )}
       </main>
