@@ -1945,6 +1945,36 @@ function LearningTrackerFeature({ nickname, onHome }) {
       return { items: mockItems, source: "mock", proxy: "none" };
     }
 
+    const NEWS_FEED_CACHE_KEY = "everymcu-news-feed-cache-v3";
+    const NEWS_FEED_REFRESH_MS = 10 * 60 * 1000;
+    let newsFeedMemoryCache = null;
+
+    function normalizeNewsFeedSnapshot(snapshot) {
+      const cache = snapshot?.cache && typeof snapshot.cache === "object" ? snapshot.cache : {};
+      const meta = snapshot?.meta && typeof snapshot.meta === "object" ? snapshot.meta : {};
+      return { cache, meta, savedAt: snapshot?.savedAt || 0 };
+    }
+
+    function readNewsFeedSnapshot() {
+      if (newsFeedMemoryCache) return newsFeedMemoryCache;
+      newsFeedMemoryCache = normalizeNewsFeedSnapshot(readLocalJson(NEWS_FEED_CACHE_KEY, null));
+      return newsFeedMemoryCache;
+    }
+
+    function writeNewsFeedSnapshot(cache, meta) {
+      newsFeedMemoryCache = { cache, meta, savedAt: Date.now() };
+      writeLocalJson(NEWS_FEED_CACHE_KEY, newsFeedMemoryCache);
+    }
+
+    function hasCachedNews(cache, cat) {
+      return Array.isArray(cache?.[cat]) && cache[cat].length > 0;
+    }
+
+    function isNewsCacheFresh(meta, cat) {
+      const fetchedAt = new Date(meta?.[cat]?.fetchedAt || 0).getTime();
+      return fetchedAt && Date.now() - fetchedAt < NEWS_FEED_REFRESH_MS;
+    }
+
     /* ══ 스켈레톤 ══════════════════════════════════════════════════ */
     function SkeletonCard() {
       return (
@@ -2085,10 +2115,13 @@ function LearningTrackerFeature({ nickname, onHome }) {
 
     /* ══ 메인 컴포넌트 ══════════════════════════════════════════════ */
     function NewsFeature({ nickname, onHome }) {
-      const [tab,       setTab]       = useState("전체"); 
-      const [cache,     setCache]     = useState({});
-      const [meta,      setMeta]      = useState({});
+      const initialNewsRef = useRef(null);
+      if (!initialNewsRef.current) initialNewsRef.current = readNewsFeedSnapshot();
+      const [tab,       setTab]       = useState("전체");
+      const [cache,     setCache]     = useState(() => initialNewsRef.current.cache);
+      const [meta,      setMeta]      = useState(() => initialNewsRef.current.meta);
       const [loading,   setLoading]   = useState({});
+      const [refreshing,setRefreshing]= useState({});
       const [readSet,   setReadSet]   = useState(new Set());
       const [likes,     setLikes]     = useState({});
       const [bmks,      setBmks]      = useState({});
@@ -2096,39 +2129,62 @@ function LearningTrackerFeature({ nickname, onHome }) {
       const [trendOpen, setTrendOpen] = useState(true);
       const [newsCloudReady, setNewsCloudReady] = useState(false);
       const fetchingRef = useRef(new Set());
+      const cacheRef = useRef(initialNewsRef.current.cache);
+      const metaRef = useRef(initialNewsRef.current.meta);
 
-      const doFetch = useCallback(async (cat) => {
+      useEffect(() => { cacheRef.current = cache; }, [cache]);
+      useEffect(() => { metaRef.current = meta; }, [meta]);
+
+      const doFetch = useCallback(async (cat, options = {}) => {
         if (fetchingRef.current.has(cat)) return;
+        const hasCache = hasCachedNews(cacheRef.current, cat);
+        const showSkeleton = !hasCache && !options.silent;
         fetchingRef.current.add(cat);
-        setLoading(p => ({ ...p, [cat]: true }));
-        const { items, source, proxy } = await fetchWithFallback(cat);
-        setCache(p => ({ ...p, [cat]: items }));
-        setMeta(p  => ({ ...p, [cat]: { source, proxy } }));
-        fetchingRef.current.delete(cat);
-        setLoading(p => ({ ...p, [cat]: false }));
+        if (showSkeleton) setLoading(p => ({ ...p, [cat]: true }));
+        else setRefreshing(p => ({ ...p, [cat]: true }));
+        try {
+          const { items, source, proxy } = await fetchWithFallback(cat);
+          let nextCache = cacheRef.current;
+          setCache(p => {
+            nextCache = { ...p, [cat]: items };
+            cacheRef.current = nextCache;
+            return nextCache;
+          });
+          setMeta(p => {
+            const nextMeta = { ...p, [cat]: { source, proxy, fetchedAt: cloudNow() } };
+            metaRef.current = nextMeta;
+            writeNewsFeedSnapshot(nextCache, nextMeta);
+            return nextMeta;
+          });
+        } finally {
+          fetchingRef.current.delete(cat);
+          setLoading(p => ({ ...p, [cat]: false }));
+          setRefreshing(p => ({ ...p, [cat]: false }));
+        }
       }, []);
 
       const refreshCat = useCallback((cat) => {
-        setCache(p => { const n = { ...p }; delete n[cat]; return n; });
-        setMeta(p  => { const n = { ...p }; delete n[cat]; return n; });
-        fetchingRef.current.delete(cat);
-        doFetch(cat);
+        doFetch(cat, { silent: true });
       }, [doFetch]);
 
       useEffect(() => {
         const fetchAll = async () => {
           const categories = Object.keys(FEEDS);
+          const needsRefresh = categories.some(cat => !hasCachedNews(cacheRef.current, cat) || !isNewsCacheFresh(metaRef.current, cat));
+          if (!needsRefresh) return;
           for (const cat of categories) {
-            doFetch(cat);
-            await new Promise(r => setTimeout(r, 1500)); 
+            doFetch(cat, { silent: hasCachedNews(cacheRef.current, cat) });
+            await new Promise(r => setTimeout(r, 250));
           }
         };
         fetchAll();
       }, [doFetch]);
 
       useEffect(() => { 
-        if (tab !== "AI추천" && tab !== "전체" && !cache[tab]) doFetch(tab); 
-      }, [tab, cache, doFetch]); 
+        if (tab === "AI추천" || tab === "전체") return;
+        if (!hasCachedNews(cache, tab)) doFetch(tab);
+        else if (!isNewsCacheFresh(meta, tab)) doFetch(tab, { silent: true });
+      }, [tab, cache, meta, doFetch]);
 
       useEffect(() => {
         let alive = true;
@@ -2213,7 +2269,8 @@ function LearningTrackerFeature({ nickname, onHome }) {
       const isLoadingAll = (isAllTab || isAITab) && Object.values(cache).flat().length === 0;
       const isLoadingCat = !kwFilter && !isAITab && !isAllTab && loading[tab];
       const isLoading   = isLoadingAll || isLoadingCat;
-      
+      const isRefreshing = !isLoading && !kwFilter && Object.values(refreshing).some(Boolean);
+
       const isMock      = !kwFilter && !isAITab && !isAllTab && meta[tab]?.source === "mock";
 
       const markRead   = id => setReadSet(p => new Set([...p, id]));
@@ -2251,7 +2308,7 @@ function LearningTrackerFeature({ nickname, onHome }) {
                   <button onClick={() => refreshCat(tab)}
                     className="p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition-all"
                     style={{ border:"none", cursor:"pointer", display:"flex" }}>
-                    <RefreshCw size={15} className={isLoading ? "animate-spin" : ""} />
+                    <RefreshCw size={15} className={(loading[tab] || refreshing[tab]) ? "animate-spin" : ""} />
                   </button>
                 )}
                 <button onClick={onHome}
@@ -2263,10 +2320,11 @@ function LearningTrackerFeature({ nickname, onHome }) {
             </div>
             <div className="flex items-center gap-1.5 mt-1">
               <div className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                style={{ background: isLoading ? "#fbbf24" : isMock ? "#f87171" : "#34d399" }} />
+                style={{ background: isLoading ? "#fbbf24" : isRefreshing ? "#60a5fa" : isMock ? "#f87171" : "#34d399" }} />
               <p className="text-[10px] text-gray-400">
                 {kwFilter ? `관련 뉴스 ${kwList.length}건`
                   : isLoading ? "최신 뉴스 불러오는 중..."
+                  : isRefreshing ? "저장된 기사 표시 중 · 새 기사 확인 중"
                   : isMock   ? "네트워크 불안정 — 샘플 데이터 표시 중"
                   : "Google News 실시간 연동"}
               </p>
